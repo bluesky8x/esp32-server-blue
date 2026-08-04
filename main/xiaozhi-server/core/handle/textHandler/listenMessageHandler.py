@@ -10,10 +10,11 @@ from core.utils.dialogue import Message
 from core.providers.asr.dto.dto import InterfaceType
 from core.handle.receiveAudioHandle import startToChat
 from core.handle.reportHandle import enqueue_asr_report
-from core.handle.sendAudioHandle import send_stt_message, send_tts_message
+from core.handle.sendAudioHandle import send_stt_message
+from core.handle.abortHandle import handleAbortMessage
 from core.handle.textMessageHandler import TextMessageHandler
 from core.handle.textMessageType import TextMessageType
-from core.utils.util import remove_punctuation_and_length
+from core.characters.character_switch import handle_character_wake, match_character_wake
 from core.providers.tts.dto.dto import ContentType, TTSMessageDTO, SentenceType
 
 
@@ -58,9 +59,6 @@ class ListenTextMessageHandler(TextMessageHandler):
             if "text" in msg_json:
                 conn.last_activity_time = time.time() * 1000
                 original_text = msg_json["text"]  # 保留原始文本
-                filtered_len, filtered_text = remove_punctuation_and_length(
-                    original_text
-                )
 
                 # 检查是否是设备呼叫指令 [device_call]
                 if original_text.startswith("[device_call]"):
@@ -93,24 +91,20 @@ class ListenTextMessageHandler(TextMessageHandler):
                     conn.dialogue.put(Message(role="assistant", content=call_text))
                     return
 
-                # 识别是否是唤醒词
-                is_wakeup_words = filtered_text in conn.config.get("wakeup_words")
-                # 是否开启唤醒词回复
-                enable_greeting = conn.config.get("enable_greeting", True)
+                # 角色唤醒词：先切换角色，避免后续 abort 打断 TTS
+                char_id, wake_only, _remainder = match_character_wake(
+                    original_text, conn.config
+                )
+                if char_id:
+                    if conn.client_is_speaking:
+                        await handleAbortMessage(conn)
+                    conn.client_abort = False
+                    conn.sentence_id = uuid.uuid4().hex
+                    chat_text = await handle_character_wake(conn, original_text)
+                    if chat_text is None:
+                        return
+                    original_text = chat_text
 
-                if is_wakeup_words and not enable_greeting:
-                    # 如果是唤醒词，且关闭了唤醒词回复，就不用回答
-                    await send_stt_message(conn, original_text)
-                    await send_tts_message(conn, "stop", None)
-                    conn.client_is_speaking = False
-                elif is_wakeup_words:
-                    conn.just_woken_up = True
-                    # 上报纯文字数据（复用ASR上报功能，但不提供音频数据）
-                    enqueue_asr_report(conn, "嘿，你好呀", [])
-                    await startToChat(conn, "嘿，你好呀")
-                else:
-                    conn.just_woken_up = True
-                    # 上报纯文字数据（复用ASR上报功能，但不提供音频数据）
-                    enqueue_asr_report(conn, original_text, [])
-                    # 否则需要LLM对文字内容进行答复
-                    await startToChat(conn, original_text)
+                conn.just_woken_up = True
+                enqueue_asr_report(conn, original_text, [])
+                await startToChat(conn, original_text)

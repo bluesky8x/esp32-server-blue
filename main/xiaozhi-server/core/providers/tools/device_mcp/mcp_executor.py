@@ -4,9 +4,13 @@ from typing import Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.connection import ConnectionHandler
+from config.logger import setup_logging
 from ..base import ToolType, ToolDefinition, ToolExecutor
 from plugins_func.register import Action, ActionResponse
 from .mcp_handler import call_mcp_tool
+
+TAG = __name__
+logger = setup_logging()
 
 
 class DeviceMCPExecutor(ToolExecutor):
@@ -35,28 +39,42 @@ class DeviceMCPExecutor(ToolExecutor):
             # 转换参数为JSON字符串
             import json
 
+            logger.bind(tag=TAG).info(
+                f"[tool] device_mcp → {tool_name} args={arguments}"
+            )
+
             args_str = json.dumps(arguments) if arguments else "{}"
 
             # 调用设备端MCP工具
             result = await call_mcp_tool(conn, conn.mcp_client, tool_name, args_str)
+            logger.bind(tag=TAG).info(
+                f"[tool] device_mcp ← {tool_name} raw={str(result)[:200]}"
+            )
 
             resultJson = None
             if isinstance(result, str):
                 try:
                     resultJson = json.loads(result)
-                except Exception as e:
+                except Exception:
                     pass
 
-            # 视觉大模型不经过二次LLM处理
+            # 视觉大模型：action 为 Action 枚举名（RESPONSE / REQLLM 等）
             if (
                 resultJson is not None
                 and isinstance(resultJson, dict)
                 and "action" in resultJson
+                and isinstance(resultJson["action"], str)
+                and resultJson["action"] in Action.__members__
             ):
                 return ActionResponse(
                     action=Action[resultJson["action"]],
                     response=resultJson.get("response", ""),
                 )
+
+            # 设备/模拟器：action 为业务字段（turn_left, forward…）或 success=true
+            if resultJson is not None and isinstance(resultJson, dict):
+                if resultJson.get("success") is True or resultJson.get("simulated") is True:
+                    return ActionResponse(action=Action.NONE, result=resultJson)
 
             return ActionResponse(action=Action.REQLLM, result=str(result))
 

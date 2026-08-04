@@ -247,7 +247,8 @@ class PromptManager:
             self.logger.bind(tag=TAG).error(f"更新上下文信息失败: {e}")
 
     def build_enhanced_prompt(
-        self, user_prompt: str, device_id: str, client_ip: str = None, *args, **kwargs
+        self, user_prompt: str, device_id: str, client_ip: str = None,
+        active_character: str = None, *args, **kwargs
     ) -> str:
         """构建增强的系统提示词"""
         if not self.base_prompt_template:
@@ -285,6 +286,18 @@ class PromptManager:
 
             # 替换模板变量
             template = Template(self.base_prompt_template)
+            character_context = ""
+            character_name = "Assistant"
+            character = active_character or self.config.get("character")
+            if character in ("kira", "lili"):
+                from core.characters.character_registry import (
+                    get_display_name,
+                    render_full_memory,
+                )
+
+                character_name = get_display_name(character)
+                character_context = render_full_memory(character, device_id or "default")
+
             enhanced_prompt = template.render(
                 base_prompt=user_prompt,
                 current_time="{{current_time}}",
@@ -298,10 +311,13 @@ class PromptManager:
                 client_ip=client_ip,
                 dynamic_context=self.context_data,
                 language=language,
+                character_context=character_context,
+                character_name=character_name,
+                kira_context=character_context,
                 *args,
                 **kwargs,
             )
-            device_cache_key = f"device_prompt:{device_id}"
+            device_cache_key = f"device_prompt:{device_id}:{character or 'default'}"
             self.cache_manager.set(
                 self.CacheType.DEVICE_PROMPT, device_cache_key, enhanced_prompt
             )
@@ -313,3 +329,14 @@ class PromptManager:
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"构建增强提示词失败: {e}")
             return user_prompt
+
+    def refresh_device_prompt(
+        self, user_prompt: str, device_id: str, client_ip: str = None, **kwargs
+    ) -> str:
+        """Rebuild and cache device prompt (e.g. after memory or character switch)."""
+        active_character = kwargs.get("active_character") or self.config.get("character")
+        device_cache_key = f"device_prompt:{device_id}:{active_character or 'default'}"
+        self.cache_manager.delete(self.CacheType.DEVICE_PROMPT, device_cache_key)
+        return self.build_enhanced_prompt(
+            user_prompt, device_id, client_ip, **kwargs
+        )

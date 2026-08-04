@@ -1,0 +1,35 @@
+# Copy to data/.config.yaml and fill in your OpenAI API key.
+# data/ is gitignored — secrets stay local.
+
+server:
+  ip: 0.0.0.0
+  port: 8000
+  http_port: 8003
+  # Replace with your Mac LAN IP (ipconfig getifaddr en0)
+  websocket: ws://192.168.68.69:8000/xiaozhi/v1/
+  vision_explain: http://192.168.68.69:8003/mcp/vision/explain
+  timezone_offset: +7
+
+prompt: |
+  You are Kira, a bilingual Vietnamese/English voice assistant (18, warm, natural friend).
+  Understand intent before responding. Ignore speech fillers. Do not guess — ask one short clarification when unsure.
+  No status updates ("I'm checking..."). Call tools silently, then answer naturally.
+  Warm, calm, professional female voice (~30). Match user language (Vietnamese or English).
+  See data/.config.yaml for the full prompt template.
+
+selected_module:
+  VAD: SileroVAD
+  ASR: FunASR          # local STT — free
+  LLM: OpenAILLM        # ChatGPT API
+  TTS: EdgeTTS          # free neural voice
+  Memory: nomem
+  Intent: function_call # required for motor / IoT tools
+
+LLM:
+  OpenAILLM:
+    type: openai
+    base_url: https://api.openai.com/v1
+    model_name: gpt-5-mini
+    api_key: YOUR_OPENAI_API_KEY
+    reasoning_effort: minimal   # low latency for voice
+    max_tokens: 120             # mapped to max_completion_tokens for gpt-5

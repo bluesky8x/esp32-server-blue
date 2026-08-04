@@ -47,6 +47,14 @@ async def load_config():
     # 初始化目录
     ensure_directories(config)
 
+    if config.get("character"):
+        from core.characters.character_registry import get_operational_prompt, resolve_character_id
+
+        char = resolve_character_id(config.get("character"))
+        if char:
+            config["character"] = char
+            config["prompt"] = get_operational_prompt(char)
+
     # 缓存配置
     cache_manager.set(CacheType.CONFIG, "main_config", config)
     return config

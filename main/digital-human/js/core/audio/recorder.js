@@ -3,6 +3,9 @@ import { log } from '../../utils/logger.js?v=0205';
 import { initOpusEncoder } from './opus-codec.js?v=0205';
 import { getAudioPlayer } from './player.js?v=0205';
 
+// One worklet module per AudioContext — re-adding throws NotSupportedError
+const workletLoadedContexts = new WeakSet();
+
 // Audio recorder class
 export class AudioRecorder {
     constructor() {
@@ -19,6 +22,7 @@ export class AudioRecorder {
         this.visualizationRequest = null;
         this.recordingTimer = null;
         this.websocket = null;
+        this.onListenStop = null;
         // Callback functions
         this.onRecordingStart = null;
         this.onRecordingStop = null;
@@ -92,10 +96,27 @@ export class AudioRecorder {
         this.audioContext = this.getAudioContext();
         try {
             if (this.audioContext.audioWorklet) {
-                const blob = new Blob([this.getAudioProcessorCode()], { type: 'application/javascript' });
-                const url = URL.createObjectURL(blob);
-                await this.audioContext.audioWorklet.addModule(url);
-                URL.revokeObjectURL(url);
+                if (!workletLoadedContexts.has(this.audioContext)) {
+                    const blob = new Blob([this.getAudioProcessorCode()], { type: 'application/javascript' });
+                    const url = URL.createObjectURL(blob);
+                    try {
+                        await this.audioContext.audioWorklet.addModule(url);
+                        workletLoadedContexts.add(this.audioContext);
+                    } catch (error) {
+                        // Reconnect / second recording: processor already registered on this context
+                        if (
+                            error.name === 'NotSupportedError' ||
+                            String(error.message).includes('already registered')
+                        ) {
+                            workletLoadedContexts.add(this.audioContext);
+                            log('AudioWorklet processor already registered, reusing', 'debug');
+                        } else {
+                            throw error;
+                        }
+                    } finally {
+                        URL.revokeObjectURL(url);
+                    }
+                }
                 const audioProcessor = new AudioWorkletNode(this.audioContext, 'audio-recorder-processor');
                 audioProcessor.port.onmessage = (event) => {
                     if (event.data.type === 'buffer') {
@@ -208,7 +229,15 @@ export class AudioRecorder {
                 return false;
             }
             log('请至少录制1-2秒音频以确保收集足够的数据', 'info');
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000, channelCount: 1 } });
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: 16000,
+                    channelCount: 1,
+                },
+            });
             this.audioContext = this.getAudioContext();
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
@@ -304,10 +333,13 @@ export class AudioRecorder {
             }
             // Encode and send remaining data
             this.encodeAndSendOpus();
-            // Send end signal
+            // Send end signal + flush server ASR buffer (push-to-talk / manual stop)
             if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
                 const emptyOpusFrame = new Uint8Array(0);
                 this.websocket.send(emptyOpusFrame);
+                if (this.onListenStop) {
+                    this.onListenStop();
+                }
                 log('已发送录音停止信号', 'info');
             }
             if (this.onRecordingStop) {

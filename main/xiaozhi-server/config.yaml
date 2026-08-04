@@ -85,6 +85,12 @@ exit_commands:
   - "退出"
   - "关闭"
 
+# Blue V1 — pause between sequential motor steps (seconds)
+robot_move_step_delay_seconds: 5
+robot_move_default_duration_seconds: 5
+robot_move_max_duration_seconds: 30
+robot_move_max_sequence: 3
+
 xiaozhi:
   type: hello
   version: 1
@@ -286,7 +292,8 @@ Intent:
       # play_music是服务器自带的音乐播放，hass_play_music是通过home assistant控制的独立外部程序音乐播放
       # 如果用了hass_play_music，就不要开启play_music，两者只留一个
       - play_music
-      #- hass_state
+      #- hass_get_state
+      #- hass_set_state
       #- hass_play_music
 
 Memory:
@@ -512,6 +519,8 @@ ASR:
     api_key: 你的OpenAI API密钥
     base_url: https://api.openai.com/v1/audio/transcriptions
     model_name: gpt-4o-mini-transcribe
+    language: vi
+    prompt: "Vietnamese (tiếng Việt) or English only. Not Thai. Use Vietnamese diacritics. Omit fillers."
     output_dir: tmp/
   GroqASR:
     # Groq语音识别服务，需要先在Groq Console创建API密钥

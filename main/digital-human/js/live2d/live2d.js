@@ -577,6 +577,28 @@ class Live2DManager {
         this.lastEmotionActionTime = now;
     }
 
+    /**
+     * Behavior Engine — motion before / with speech
+     * @param {string[]} actions
+     */
+    triggerBehaviorActions(actions) {
+        if (!this.live2dModel || !Array.isArray(actions)) return;
+        const map = {
+            turn_to_user: 'Tap',
+            look_at_camera: 'Tap',
+            smile: 'FlickUp',
+            nod_happy: 'FlickUp',
+            tilt_head: 'Flick',
+            step_back: 'FlickDown',
+        };
+        for (const action of actions) {
+            const motionName = map[action];
+            if (motionName) {
+                this.motion(motionName);
+            }
+        }
+    }
+
 
 
     /**

@@ -24,8 +24,11 @@ class TextMessageProcessor:
             if isinstance(msg_json, dict):
                 message_type = msg_json.get("type")
 
-                # 记录日志
-                conn.logger.bind(tag=TAG).info(f"收到{message_type}消息：{message}")
+                # 记录日志（MCP 工具列表很长，避免 shutdown 时 loguru 写失败）
+                log_payload = message
+                if message_type == "mcp" and len(message) > 400:
+                    log_payload = message[:400] + "...[truncated]"
+                conn.logger.bind(tag=TAG).info(f"收到{message_type}消息：{log_payload}")
 
                 # 获取并执行处理器
                 handler = self.registry.get_handler(message_type)

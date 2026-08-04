@@ -81,6 +81,7 @@ class TTSProviderBase(ABC):
         self.tts_text_buff = []
         self.punctuations = (
             "。",
+            ".",
             "？",
             "?",
             "！",
@@ -95,6 +96,7 @@ class TTSProviderBase(ABC):
             "、",
             ",",
             "。",
+            ".",
             "？",
             "?",
             "！",
@@ -120,8 +122,23 @@ class TTSProviderBase(ABC):
     def handle_audio_file(self, file_audio: bytes, text):
         self.before_stop_play_files.append((file_audio, text))
 
+    def _sanitize_tts_text(self, text: str, sentence_id=None) -> str:
+        """Remove robot mv: tags before speech; dispatch motor if connection supports it."""
+        if not text:
+            return ""
+        from core.utils.robot_move_codec import split_robot_move_steps
+
+        cleaned, steps = split_robot_move_steps(text, trim_edges=False)
+        if steps and self.conn and hasattr(self.conn, "_dispatch_robot_move_steps"):
+            sid = sentence_id or getattr(self, "current_sentence_id", None)
+            self.conn._dispatch_robot_move_steps(sid, steps)
+        return textUtils.normalize_vietnamese_tts_text(cleaned)
+
     def to_tts_stream(self, text, opus_handler: Callable[[bytes], None] = None) -> None:
         # 保留原始文本用于显示/上报
+        text = self._sanitize_tts_text(text, getattr(self, "current_sentence_id", None))
+        if not text or not text.strip():
+            return
         original_text = text
         text = MarkdownCleaner.clean_markdown(text)
         # 使用正则一次性替换，避免重复遍历和部分匹配问题
@@ -134,8 +151,19 @@ class TTSProviderBase(ABC):
                 try:
                     audio_bytes = asyncio.run(self.text_to_speak(text, None))
                     if audio_bytes:
-                        # 使用原始文本用于显示/上报
-                        self.tts_audio_queue.put((SentenceType.FIRST, None, original_text, getattr(self, 'current_sentence_id', None)))
+                        sent_start = False
+
+                        def opus_handler(data):
+                            nonlocal sent_start
+                            sid = getattr(self, "current_sentence_id", None)
+                            if not sent_start:
+                                self.tts_audio_queue.put(
+                                    (SentenceType.FIRST, data, original_text, sid)
+                                )
+                                sent_start = True
+                            else:
+                                self.handle_opus(data)
+
                         audio_bytes_to_data_stream(
                             audio_bytes,
                             file_type=self.audio_file_type,
@@ -184,7 +212,19 @@ class TTSProviderBase(ABC):
                     logger.bind(tag=TAG).error(
                         f"语音生成失败: {original_text}，请检查网络或服务是否正常"
                     )
-                self.tts_audio_queue.put((SentenceType.FIRST, None, original_text, getattr(self, 'current_sentence_id', None)))
+                sent_start = False
+
+                def opus_handler(data):
+                    nonlocal sent_start
+                    sid = getattr(self, "current_sentence_id", None)
+                    if not sent_start:
+                        self.tts_audio_queue.put(
+                            (SentenceType.FIRST, data, original_text, sid)
+                        )
+                        sent_start = True
+                    else:
+                        self.handle_opus(data)
+
                 self._process_audio_file_stream(tmp_file, callback=opus_handler)
             except Exception as e:
                 logger.bind(tag=TAG).error(f"Failed to generate TTS file: {e}")
@@ -193,6 +233,9 @@ class TTSProviderBase(ABC):
     def to_tts(self, text):
         # 保留原始文本用于日志/显示
         original_text = text
+        text = self._sanitize_tts_text(text, getattr(self, "current_sentence_id", None))
+        if not text or not str(text).strip():
+            return None
         text = MarkdownCleaner.clean_markdown(text)
         if self._correct_words_pattern:
             text = self._correct_words_pattern.sub(lambda m: self.correct_words[m.group(0)], text)
@@ -383,7 +426,17 @@ class TTSProviderBase(ABC):
                     self.is_first_sentence = True
                     self.tts_audio_first_sentence = True
                 elif ContentType.TEXT == message.content_type:
-                    self.tts_text_buff.append(message.content_detail)
+                    detail = self._sanitize_tts_text(
+                        message.content_detail or "", message.sentence_id
+                    )
+                    if detail:
+                        if self.tts_text_buff:
+                            prev = self.tts_text_buff[-1]
+                            self.tts_text_buff[-1] = textUtils.join_stream_text_chunks(
+                                prev, detail
+                            )
+                        else:
+                            self.tts_text_buff.append(detail)
                     segment_text = self._get_segment_text()
                     if segment_text:
                         self.to_tts_stream(segment_text, opus_handler=self.handle_opus)
@@ -501,11 +554,12 @@ class TTSProviderBase(ABC):
                 last_punct_pos = pos
 
         if last_punct_pos != -1:
-            segment_text_raw = current_text[: last_punct_pos + 1]
-            segment_text = textUtils.get_string_no_punctuation_or_emoji(
-                segment_text_raw
+            raw_slice = current_text[: last_punct_pos + 1]
+            spoken = self._sanitize_tts_text(
+                raw_slice, getattr(self, "current_sentence_id", None)
             )
-            self.processed_chars += len(segment_text_raw)  # 更新已处理字符位置
+            segment_text = textUtils.get_string_no_punctuation_or_emoji(spoken)
+            self.processed_chars += len(raw_slice)  # 更新已处理字符位置
 
             # 如果是第一句话，在找到第一个逗号后，将标志设置为False
             if self.is_first_sentence:
@@ -513,7 +567,9 @@ class TTSProviderBase(ABC):
 
             return segment_text
         elif self.tts_stop_request and current_text:
-            segment_text = current_text
+            segment_text = self._sanitize_tts_text(
+                current_text, getattr(self, "current_sentence_id", None)
+            )
             self.is_first_sentence = True  # 重置标志
             return segment_text
         else:
@@ -560,11 +616,16 @@ class TTSProviderBase(ABC):
         full_text = "".join(self.tts_text_buff)
         remaining_text = full_text[self.processed_chars :]
         if remaining_text:
+            raw_remaining = remaining_text
+            remaining_text = self._sanitize_tts_text(
+                remaining_text, getattr(self, "current_sentence_id", None)
+            )
             segment_text = textUtils.get_string_no_punctuation_or_emoji(remaining_text)
+            self.processed_chars += len(raw_remaining)
             if segment_text:
                 self.to_tts_stream(segment_text, opus_handler=opus_handler)
-                self.processed_chars += len(full_text)
                 return True
+            return True
         return False
 
     def _apply_percentage_params(self, config):

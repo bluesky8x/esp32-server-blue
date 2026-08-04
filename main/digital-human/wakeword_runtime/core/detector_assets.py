@@ -47,6 +47,16 @@ class DetectorAssetsBuilder:
         )
 
     def _write_keywords_file(self, model_root: Path) -> Path:
+        keywords_path = model_root / "keywords.txt"
+        if keywords_path.exists():
+            lines = [
+                line.strip()
+                for line in keywords_path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+            if lines and all("@" in line for line in lines):
+                return keywords_path
+
         try:
             from pypinyin import Style, pinyin
         except ImportError as exc:

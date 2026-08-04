@@ -211,11 +211,22 @@ async def handle_mcp_message(
                 else:
                     await mcp_client.set_ready(True)
                     logger.bind(tag=TAG).debug("所有工具已获取，MCP客户端准备就绪")
+                    motor_names = sorted(
+                        n
+                        for n in mcp_client.tools
+                        if "motor" in n or "chassis" in n
+                    )
+                    logger.bind(tag=TAG).info(
+                        f"客户端 MCP 就绪: {len(mcp_client.tools)} tools, "
+                        f"motor/chassis={motor_names}"
+                    )
 
                     # 刷新工具缓存，确保MCP工具被包含在函数列表中
                     if hasattr(conn, "func_handler") and conn.func_handler:
                         conn.func_handler.tool_manager.refresh_tools()
                         conn.func_handler.current_support_functions()
+                        if hasattr(conn, "_flush_pending_robot_moves"):
+                            conn._flush_pending_robot_moves()
             return
 
     # Handle method calls (requests from the client)

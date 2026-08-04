@@ -17,6 +17,7 @@ from core.providers.asr.dto.dto import InterfaceType
 from core.handle.receiveAudioHandle import startToChat
 from core.handle.reportHandle import enqueue_asr_report
 from core.utils.util import remove_punctuation_and_length
+from core.utils.speech_filter import analyze_pcm, is_likely_speech, is_noise_transcript
 from core.handle.receiveAudioHandle import handleAudioMessage
 from typing import Optional, Tuple, List, NamedTuple, TYPE_CHECKING
 
@@ -59,6 +60,10 @@ class ASRProviderBase(ABC):
 
     # 接收音频
     async def receive_audio(self, conn: "ConnectionHandler", pcm_frame, audio_have_voice):
+        # 机器人播放 TTS 时忽略麦克风（防回声/噪音触发 ASR 打断播报）
+        if conn.client_is_speaking and conn.client_listen_mode != "manual":
+            return
+
         if conn.client_listen_mode == "manual":
             # 手动模式：缓存音频用于ASR识别
             conn.asr_audio.append(pcm_frame)
@@ -83,12 +88,28 @@ class ASRProviderBase(ABC):
     # 处理语音停止
     async def handle_voice_stop(self, conn: "ConnectionHandler", asr_audio_task: List[bytes]):
         """并行处理ASR和声纹识别"""
+        if conn.client_is_speaking and conn.client_listen_mode != "manual":
+            logger.bind(tag=TAG).debug("助手播报中，忽略 ASR 结果（防回声打断）")
+            conn.reset_audio_states()
+            return
+
         try:
             total_start_time = time.monotonic()
 
             # 数据已经是PCM直接使用
             pcm_data = asr_audio_task
             combined_pcm_data = b"".join(pcm_data)
+
+            from core.utils.speech_filter import is_likely_speech, is_noise_transcript
+
+            if not is_likely_speech(combined_pcm_data):
+                analysis = analyze_pcm(combined_pcm_data)
+                logger.bind(tag=TAG).info(
+                    f"丢弃非语音音频: {analysis.get('reason', 'unknown')} "
+                    f"(rms={analysis.get('rms')}, dur={analysis.get('duration_ms')})"
+                )
+                self.stop_ws_connection()
+                return
 
             # 预先准备WAV数据
             wav_data = None
@@ -162,6 +183,12 @@ class ASRProviderBase(ABC):
             # 检查文本长度
             text_len, _ = remove_punctuation_and_length(content_for_length_check)
             self.stop_ws_connection()
+
+            if text_len > 0 and is_noise_transcript(content_for_length_check):
+                logger.bind(tag=TAG).info(
+                    f"丢弃噪音/音乐转写: {content_for_length_check[:80]!r}"
+                )
+                return
 
             if text_len > 0:
                 audio_snapshot = asr_audio_task.copy()

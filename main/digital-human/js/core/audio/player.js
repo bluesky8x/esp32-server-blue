@@ -147,6 +147,22 @@ export class AudioPlayer {
         }
     }
 
+    // 确保 AudioContext 可播放（浏览器 autoplay 策略）
+    async ensureAudioReady() {
+        try {
+            const ctx = this.getAudioContext();
+            if (ctx.state === 'suspended') {
+                await ctx.resume();
+                log('AudioContext 已恢复', 'info');
+            }
+            if (!this.streamingContext) {
+                await this.playBufferedAudio();
+            }
+        } catch (error) {
+            log(`AudioContext 恢复失败: ${error.message}`, 'warning');
+        }
+    }
+
     // 启动音频缓冲
     async startAudioBuffering() {
         log("开始音频缓冲...", 'info');
@@ -184,6 +200,10 @@ export class AudioPlayer {
     async playBufferedAudio() {
         try {
             this.audioContext = this.getAudioContext();
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+                log('音频上下文已从挂起状态恢复', 'info');
+            }
 
             if (!this.opusDecoder) {
                 log('初始化Opus解码器...', 'info');

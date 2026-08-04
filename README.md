@@ -10,7 +10,8 @@
 </p>
 
 <p align="center">
-<a href="./docs/FAQ.md">常见问题</a>
+<a href="./BLUE.md">Blue V1 stack (esp32-blue)</a>
+· <a href="./docs/FAQ.md">常见问题</a>
 · <a href="https://github.com/xinnan-tech/xiaozhi-esp32-server/issues">反馈问题</a>
 · <a href="./README.md#%E9%83%A8%E7%BD%B2%E6%96%87%E6%A1%A3">部署文档</a>
 · <a href="https://github.com/xinnan-tech/xiaozhi-esp32-server/releases">更新日志</a>

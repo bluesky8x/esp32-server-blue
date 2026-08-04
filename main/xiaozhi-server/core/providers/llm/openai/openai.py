@@ -69,6 +69,39 @@ class LLMProvider(LLMProviderBase):
         if model_key_msg:
             logger.bind(tag=TAG).error(model_key_msg)
         self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=custom_timeout)
+        self.reasoning_effort = config.get("reasoning_effort", "minimal")
+
+    @staticmethod
+    def _is_reasoning_model(model_name: str) -> bool:
+        name = (model_name or "").lower()
+        return (
+            name.startswith("gpt-5")
+            or name.startswith("o1")
+            or name.startswith("o3")
+            or name.startswith("o4")
+        )
+
+    def _apply_optional_params(self, request_params: dict, **kwargs):
+        optional_params = {
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "temperature": kwargs.get("temperature", self.temperature),
+            "top_p": kwargs.get("top_p", self.top_p),
+            "frequency_penalty": kwargs.get(
+                "frequency_penalty", self.frequency_penalty
+            ),
+        }
+
+        if self._is_reasoning_model(self.model_name):
+            max_out = optional_params.get("max_tokens")
+            if max_out is not None:
+                request_params["max_completion_tokens"] = max_out
+            if self.reasoning_effort:
+                request_params["reasoning_effort"] = self.reasoning_effort
+            return
+
+        for key, value in optional_params.items():
+            if value is not None:
+                request_params[key] = value
 
     @staticmethod
     def normalize_dialogue(dialogue):
@@ -97,17 +130,7 @@ class LLMProvider(LLMProviderBase):
             "stream": True,
         }
 
-        # 添加可选参数,只有当参数不为None时才添加
-        optional_params = {
-            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-            "temperature": kwargs.get("temperature", self.temperature),
-            "top_p": kwargs.get("top_p", self.top_p),
-            "frequency_penalty": kwargs.get("frequency_penalty", self.frequency_penalty),
-        }
-
-        for key, value in optional_params.items():
-            if value is not None:
-                request_params[key] = value
+        self._apply_optional_params(request_params, **kwargs)
 
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)
@@ -144,16 +167,7 @@ class LLMProvider(LLMProviderBase):
             "tools": functions,
         }
 
-        optional_params = {
-            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-            "temperature": kwargs.get("temperature", self.temperature),
-            "top_p": kwargs.get("top_p", self.top_p),
-            "frequency_penalty": kwargs.get("frequency_penalty", self.frequency_penalty),
-        }
-
-        for key, value in optional_params.items():
-            if value is not None:
-                request_params[key] = value
+        self._apply_optional_params(request_params, **kwargs)
 
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)

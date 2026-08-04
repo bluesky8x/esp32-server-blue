@@ -3,6 +3,7 @@ import hashlib
 import json
 import queue
 import socket
+import subprocess
 import threading
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -236,16 +237,50 @@ class TestRuntimeHttpServer:
                     encoding="utf-8",
                 )
 
-                keywords_lines = [self._build_keyword_line(item) for item in normalized_wake_words]
-                keywords_path.write_text(
-                    ("\n".join(keywords_lines) + "\n") if keywords_lines else "",
-                    encoding="utf-8",
-                )
+                if enabled and normalized_wake_words:
+                    self._write_keywords_file(model_root, normalized_wake_words)
+                elif not enabled:
+                    keywords_path.write_text("", encoding="utf-8")
 
                 return {
                     "enabled": enabled,
                     "wakeWords": normalized_wake_words,
                 }
+
+            def _write_keywords_file(self, model_root: Path, wake_words: list[str]) -> None:
+                keywords_path = model_root / "keywords.txt"
+                en_phone = model_root / "en.phone"
+                tokens_file = model_root / "tokens.txt"
+                if en_phone.exists() and tokens_file.exists():
+                    raw_path = model_root / "keywords_raw.txt"
+                    raw_lines = []
+                    for wake_word in wake_words:
+                        phrase = wake_word.strip().upper()
+                        label = phrase.replace(" ", "_")
+                        raw_lines.append(f"{phrase} @{label}")
+                    raw_path.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
+                    subprocess.run(
+                        [
+                            "sherpa-onnx-cli",
+                            "text2token",
+                            "--tokens",
+                            str(tokens_file),
+                            "--tokens-type",
+                            "phone+ppinyin",
+                            "--lexicon",
+                            str(en_phone),
+                            str(raw_path),
+                            str(keywords_path),
+                        ],
+                        check=True,
+                    )
+                    return
+
+                keywords_lines = [self._build_keyword_line(item) for item in wake_words]
+                keywords_path.write_text(
+                    ("\n".join(keywords_lines) + "\n") if keywords_lines else "",
+                    encoding="utf-8",
+                )
 
             def _build_keyword_line(self, keyword_text: str) -> str:
                 from pypinyin import Style, pinyin

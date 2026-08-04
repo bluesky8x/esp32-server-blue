@@ -1,6 +1,7 @@
 import time
 import json
 import asyncio
+import uuid
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -84,8 +85,22 @@ async def startToChat(conn: "ConnectionHandler", text):
             return
 
     # manual 模式下不打断正在播放的内容
+    from core.characters.character_switch import handle_character_wake, match_character_wake
+
+    char_id, wake_only, _remainder = match_character_wake(actual_text, conn.config)
+    is_character_wake = char_id is not None
+
     if conn.client_is_speaking and conn.client_listen_mode != "manual":
         await handleAbortMessage(conn)
+
+    # 角色唤醒：先切换再打招呼（并清除 abort，否则 TTS 被跳过）
+    if is_character_wake:
+        conn.client_abort = False
+        conn.sentence_id = str(uuid.uuid4().hex)
+        chat_text = await handle_character_wake(conn, actual_text)
+        if chat_text is None:
+            return
+        actual_text = chat_text
 
     # 首先进行意图分析，使用实际文本内容
     intent_handled = await handle_user_intent(conn, actual_text)
@@ -94,7 +109,16 @@ async def startToChat(conn: "ConnectionHandler", text):
         # 如果意图已被处理，不再进行聊天
         return
 
-    # 意图未被处理，继续常规聊天流程，使用实际文本内容
+    if not is_character_wake:
+        chat_text = await handle_character_wake(conn, actual_text)
+        if chat_text is None:
+            conn.client_abort = False
+            return
+        actual_text = chat_text
+    else:
+        # wake + remainder 已在上面处理过 switch，此处继续正常对话
+        pass
+
     await send_stt_message(conn, actual_text)
 
     # 准备开始新会话
@@ -119,6 +143,7 @@ async def no_voice_close_connect(conn: "ConnectionHandler", have_voice):
         ):
             conn.close_after_chat = True
             conn.client_abort = False
+            conn.last_activity_time = time.time() * 1000
             end_prompt = conn.config.get("end_prompt", {})
             if end_prompt and end_prompt.get("enable", True) is False:
                 conn.logger.bind(tag=TAG).info("结束对话，无需发送结束提示语")

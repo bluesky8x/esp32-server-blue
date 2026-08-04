@@ -33,9 +33,8 @@ from concurrent.futures import ThreadPoolExecutor
 from core.utils.dialogue import Message, Dialogue
 from core.providers.asr.dto.dto import InterfaceType
 from core.handle.textHandle import handleTextMessage
-from core.providers.tools.unified_tool_handler import UnifiedToolHandler
 from plugins_func.loadplugins import auto_import_modules
-from plugins_func.register import Action, ActionResponse, all_function_registry, module_func_map
+from plugins_func.register import Action, ActionResponse
 from core.auth import AuthenticationError
 from config.config_loader import get_private_config_from_api
 from core.providers.tts.dto.dto import ContentType, TTSMessageDTO, SentenceType
@@ -149,7 +148,8 @@ class ConnectionHandler:
         self.client_voice_window = deque(maxlen=5)
         self.first_activity_time = 0.0  # 记录首次活动的时间（毫秒）
         self.last_activity_time = 0.0  # 统一的活动时间戳（毫秒）
-        self.vad_last_voice_time = 0.0  # 记录用户最后一次说话的时间（毫秒）
+        self.vad_last_voice_time = 0.0
+        self.vad_speech_start_time = 0.0
         self.client_voice_stop = False
         self.last_is_voice = False
 
@@ -173,6 +173,21 @@ class ConnectionHandler:
         # iot相关变量
         self.iot_descriptors = {}
         self.func_handler = None
+        self._pending_robot_moves: list[tuple[str | None, str, int]] = []
+        self._robot_move_sequence_queue: list[tuple[str | None, str, int]] = []
+        self._robot_move_in_flight = False
+        self._robot_move_pump_scheduled = False
+        self._robot_move_cooldown_until = 0.0
+        self._robot_move_shutdown = False
+        self._robot_move_pump_handle = None
+
+        # Active character (voice-switchable per connection)
+        from core.characters.character_registry import is_character_enabled
+
+        default_char = self.config.get("character")
+        self.active_character = (
+            default_char if is_character_enabled(default_char) else None
+        )
 
         self.cmd_exit = self.config["exit_commands"]
 
@@ -278,24 +293,27 @@ class ConnectionHandler:
     async def _save_and_close(self, ws):
         """保存记忆并关闭连接"""
         try:
-            # 守护线程1：独立生成标题（不依赖记忆模型）
+            # 守护线程1：独立生成标题（不依赖记忆模型；需 manager-api）
             if self.session_id:
-                def generate_title_task():
-                    try:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        loop.run_until_complete(
-                            generate_and_save_chat_title(self.session_id)
-                        )
-                    except Exception as e:
-                        self.logger.bind(tag=TAG).error(f"生成标题失败: {e}")
-                    finally:
-                        try:
-                            loop.close()
-                        except Exception:
-                            pass
+                from config.manage_api_client import ManageApiClient
 
-                threading.Thread(target=generate_title_task, daemon=True).start()
+                if ManageApiClient._instance:
+                    def generate_title_task():
+                        try:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            loop.run_until_complete(
+                                generate_and_save_chat_title(self.session_id)
+                            )
+                        except Exception as e:
+                            self.logger.bind(tag=TAG).error(f"生成标题失败: {e}")
+                        finally:
+                            try:
+                                loop.close()
+                            except Exception:
+                                pass
+
+                    threading.Thread(target=generate_title_task, daemon=True).start()
 
             # 守护线程2：走老流程记忆保存（仅记忆，不含标题）
             if self.memory:
@@ -604,6 +622,12 @@ class ConnectionHandler:
         try:
             if self.tts is None:
                 self.tts = self._initialize_tts()
+            if self.tts and self.active_character:
+                from core.characters.character_registry import get_tts_voice
+
+                voice = get_tts_voice(self.active_character, self.config)
+                if voice and hasattr(self.tts, "voice"):
+                    self.tts.voice = voice
             # 打开语音合成通道
             asyncio.run_coroutine_threadsafe(
                 self.tts.open_audio_channels(self), self.loop
@@ -643,6 +667,8 @@ class ConnectionHandler:
             self._initialize_memory()
             """加载意图识别"""
             self._initialize_intent()
+            """设备 MCP / mv 标签需要 func_handler，与 intent 模块独立"""
+            self._ensure_func_handler()
             """初始化上报线程"""
             self._init_report_threads()
             """更新系统提示词"""
@@ -654,18 +680,534 @@ class ConnectionHandler:
             self.logger.bind(tag=TAG).error(f"实例化组件失败: {e}")
 
     def _init_prompt_enhancement(self):
+        from core.characters.character_registry import get_operational_prompt
 
         # 更新上下文信息
         self.prompt_manager.update_context_info(self, self.client_ip)
         enhanced_prompt = self.prompt_manager.build_enhanced_prompt(
-            self.config["prompt"],
+            get_operational_prompt(self.active_character or self.config.get("character") or "kira"),
             self.device_id,
             self.client_ip,
+            active_character=self.active_character,
             emoji_enabled=(self.features or {}).get("emoji", True),
         )
         if enhanced_prompt:
             self.change_system_prompt(enhanced_prompt)
             self.logger.bind(tag=TAG).debug("系统提示词已增强更新")
+
+    def _robot_move_available_tools(self) -> set[str]:
+        names: set[str] = set()
+        if getattr(self, "func_handler", None):
+            try:
+                names.update(
+                    t.get("function", {}).get("name")
+                    for t in self.func_handler.get_functions()
+                    if t.get("function", {}).get("name")
+                )
+            except Exception:
+                pass
+        mcp = getattr(self, "mcp_client", None)
+        if mcp is not None and getattr(mcp, "tools", None):
+            names.update(mcp.tools.keys())
+        return names
+
+    def _ensure_func_handler(self):
+        """Ensure UnifiedToolHandler exists (device MCP, mv tags, plugins)."""
+        if getattr(self, "func_handler", None) is not None:
+            return self.func_handler
+        from core.providers.tools.unified_tool_handler import UnifiedToolHandler
+
+        self.logger.bind(tag=TAG).info("[tool] creating func_handler")
+        self.func_handler = UnifiedToolHandler(self)
+        if hasattr(self, "loop") and self.loop:
+            asyncio.run_coroutine_threadsafe(self.func_handler._initialize(), self.loop)
+        return self.func_handler
+
+    def _robot_move_step_delay(self) -> float:
+        return float(self.config.get("robot_move_step_delay_seconds", 5))
+
+    def _robot_move_max_sequence(self) -> int:
+        return int(self.config.get("robot_move_max_sequence", 3))
+
+    def _robot_move_default_duration(self) -> int:
+        return int(self.config.get("robot_move_default_duration_seconds", 5))
+
+    def _robot_move_max_duration(self) -> int:
+        return int(self.config.get("robot_move_max_duration_seconds", 30))
+
+    def _shutdown_robot_moves(self) -> None:
+        """Cancel pending motor timers and drop queued moves on disconnect/shutdown."""
+        self._robot_move_shutdown = True
+        handle = getattr(self, "_robot_move_pump_handle", None)
+        if handle is not None:
+            handle.cancel()
+        self._robot_move_pump_handle = None
+        self._robot_move_sequence_queue.clear()
+        self._pending_robot_moves.clear()
+        self._robot_move_pump_scheduled = False
+        self._robot_move_in_flight = False
+
+    def _robot_move_cooldown_remaining(self) -> float:
+        return max(0.0, getattr(self, "_robot_move_cooldown_until", 0.0) - time.monotonic())
+
+    def _start_robot_move_cooldown(self, step_duration_sec: float | None = None) -> None:
+        if step_duration_sec is not None and step_duration_sec > 0:
+            delay = float(step_duration_sec)
+        else:
+            delay = self._robot_move_step_delay()
+        self._robot_move_cooldown_until = time.monotonic() + delay
+        self.logger.bind(tag=TAG).info(f"[mv] cooldown {delay:.1f}s before next step")
+
+    def _flush_pending_robot_moves(self) -> None:
+        """Dispatch mv codes queued while func_handler was still initializing."""
+        handler = getattr(self, "func_handler", None)
+        if not handler or not handler.finish_init:
+            return
+        pending = getattr(self, "_pending_robot_moves", None) or []
+        if not pending:
+            return
+        self._pending_robot_moves = []
+        self.logger.bind(tag=TAG).info(f"[mv] flushing {len(pending)} pending move(s)")
+        for key in pending:
+            if key not in self._robot_move_sequence_queue:
+                self._robot_move_sequence_queue.append(key)
+        self._pump_robot_move_queue()
+
+    def _enqueue_robot_move_steps(
+        self, sentence_id: str | None, steps: list
+    ) -> list:
+        from core.utils.robot_move_codec import RobotMoveStep, format_move_step
+
+        if not hasattr(self, "_executed_robot_moves"):
+            self._executed_robot_moves = set()
+        added = []
+        pending_keys = set(getattr(self, "_pending_robot_moves", None) or [])
+        for step in steps:
+            if not isinstance(step, RobotMoveStep):
+                step = RobotMoveStep(code=str(step), duration_sec=self._robot_move_default_duration())
+            key = (sentence_id, step.code, step.duration_sec)
+            if key in self._executed_robot_moves:
+                continue
+            if key in pending_keys:
+                continue
+            if key in self._robot_move_sequence_queue:
+                continue
+            self._robot_move_sequence_queue.append(key)
+            added.append(format_move_step(step))
+        return added
+
+    def _enqueue_robot_move_codes(
+        self, sentence_id: str | None, codes: list[str]
+    ) -> list[str]:
+        from core.utils.robot_move_codec import (
+            RobotMoveStep,
+            clamp_duration,
+            steps_from_codes,
+        )
+
+        default_sec = self._robot_move_default_duration()
+        max_sec = self._robot_move_max_duration()
+        steps = [
+            RobotMoveStep(
+                code=c,
+                duration_sec=0
+                if c == "s"
+                else clamp_duration(default_sec, default_sec=default_sec, max_sec=max_sec),
+            )
+            for c in codes
+        ]
+        return self._enqueue_robot_move_steps(sentence_id, steps)
+
+    def _pump_robot_move_queue(self) -> None:
+        if getattr(self, "_robot_move_shutdown", False):
+            return
+        if getattr(self, "stop_event", None) and self.stop_event.is_set():
+            return
+        if getattr(self, "_robot_move_in_flight", False):
+            return
+        if not self._robot_move_sequence_queue:
+            return
+        remaining = self._robot_move_cooldown_remaining()
+        if remaining > 0:
+            self._schedule_robot_move_pump(delay_s=remaining)
+            return
+        sentence_id, code, duration_sec = self._robot_move_sequence_queue.pop(0)
+        self._execute_robot_move(sentence_id, code, duration_sec)
+
+    def _schedule_robot_move_pump(self, delay_s: float | None = None) -> None:
+        if getattr(self, "_robot_move_shutdown", False):
+            return
+        if getattr(self, "stop_event", None) and self.stop_event.is_set():
+            return
+        if not self._robot_move_sequence_queue:
+            return
+        if getattr(self, "_robot_move_pump_scheduled", False):
+            return
+        if delay_s is None:
+            delay_s = max(self._robot_move_cooldown_remaining(), self._robot_move_step_delay())
+        if delay_s <= 0:
+            self._pump_robot_move_queue()
+            return
+        if not getattr(self, "loop", None):
+            self._pump_robot_move_queue()
+            return
+
+        self._robot_move_pump_scheduled = True
+
+        def _run() -> None:
+            self._robot_move_pump_scheduled = False
+            self._robot_move_pump_handle = None
+            if getattr(self, "_robot_move_shutdown", False):
+                return
+            if getattr(self, "stop_event", None) and self.stop_event.is_set():
+                return
+            try:
+                self._pump_robot_move_queue()
+            except Exception as exc:
+                self.logger.bind(tag=TAG).debug(
+                    f"[mv] pump skipped during shutdown: {exc}"
+                )
+
+        self.logger.bind(tag=TAG).info(
+            f"[mv] next step in {delay_s:.1f}s "
+            f"({len(self._robot_move_sequence_queue)} queued)"
+        )
+        self._robot_move_pump_handle = self.loop.call_later(delay_s, _run)
+
+    def _dispatch_robot_move_steps(self, sentence_id: str | None, steps: list) -> None:
+        if not steps:
+            return
+
+        from core.utils.robot_move_codec import (
+            RobotMoveStep,
+            clamp_duration,
+            format_move_step,
+            limit_robot_move_steps,
+        )
+
+        default_sec = self._robot_move_default_duration()
+        max_sec = self._robot_move_max_duration()
+        max_steps = self._robot_move_max_sequence()
+
+        normalized: list[RobotMoveStep] = []
+        for step in steps:
+            if isinstance(step, RobotMoveStep):
+                duration = (
+                    0
+                    if step.code == "s"
+                    else clamp_duration(
+                        step.duration_sec,
+                        default_sec=default_sec,
+                        max_sec=max_sec,
+                    )
+                )
+                normalized.append(RobotMoveStep(code=step.code, duration_sec=duration))
+            elif isinstance(step, (list, tuple)) and len(step) >= 2:
+                code, dur = step[0], step[1]
+                duration = (
+                    0
+                    if code == "s"
+                    else clamp_duration(dur, default_sec=default_sec, max_sec=max_sec)
+                )
+                normalized.append(RobotMoveStep(code=str(code), duration_sec=duration))
+            else:
+                code = str(step)
+                duration = 0 if code == "s" else default_sec
+                normalized.append(RobotMoveStep(code=code, duration_sec=duration))
+
+        if len(normalized) > max_steps:
+            self.logger.bind(tag=TAG).warning(
+                f"[mv] truncating {len(normalized)} moves to max {max_steps}: "
+                f"{[format_move_step(s) for s in normalized]}"
+            )
+            normalized = limit_robot_move_steps(normalized, max_steps)
+
+        tag_repr = [format_move_step(s) for s in normalized]
+        self.logger.bind(tag=TAG).info(
+            f"[mv] parsed tags={tag_repr} sentence_id={sentence_id}"
+        )
+
+        self._ensure_func_handler()
+        handler = self.func_handler
+        if not handler.finish_init:
+            if not hasattr(self, "_executed_robot_moves"):
+                self._executed_robot_moves = set()
+            if not hasattr(self, "_pending_robot_moves"):
+                self._pending_robot_moves = []
+            queued = []
+            for step in normalized:
+                key = (sentence_id, step.code, step.duration_sec)
+                if key in self._executed_robot_moves:
+                    continue
+                if key in self._pending_robot_moves:
+                    continue
+                self._pending_robot_moves.append(key)
+                queued.append(format_move_step(step))
+            if queued:
+                self.logger.bind(tag=TAG).warning(
+                    f"[mv] queued {queued} — func_handler init in progress "
+                    f"({len(self._pending_robot_moves)} pending)"
+                )
+            return
+
+        added = self._enqueue_robot_move_steps(sentence_id, normalized)
+        if added:
+            self.logger.bind(tag=TAG).info(
+                f"[mv] enqueued {added} "
+                f"(waiting={len(self._robot_move_sequence_queue)}, "
+                f"in_flight={self._robot_move_in_flight})"
+            )
+        self._pump_robot_move_queue()
+
+    def _dispatch_robot_move_codes(self, sentence_id: str | None, codes: list[str]) -> None:
+        from core.utils.robot_move_codec import extract_move_steps
+
+        if not codes:
+            return
+        steps = extract_move_steps(
+            " ".join(f"mv:{c}" for c in codes),
+            default_sec=self._robot_move_default_duration(),
+            max_sec=self._robot_move_max_duration(),
+        )
+        if len(steps) != len(codes):
+            from core.utils.robot_move_codec import RobotMoveStep, clamp_duration
+
+            default_sec = self._robot_move_default_duration()
+            max_sec = self._robot_move_max_duration()
+            steps = [
+                RobotMoveStep(
+                    code=c,
+                    duration_sec=0
+                    if c == "s"
+                    else clamp_duration(default_sec, default_sec=default_sec, max_sec=max_sec),
+                )
+                for c in codes
+            ]
+        self._dispatch_robot_move_steps(sentence_id, steps)
+
+    def _execute_robot_move(
+        self, sentence_id: str | None, code: str, duration_sec: int = 0
+    ) -> None:
+        from core.utils.robot_move_codec import (
+            RobotMoveStep,
+            build_mcp_call,
+            format_move_step,
+        )
+
+        step = RobotMoveStep(code=code, duration_sec=duration_sec)
+
+        if getattr(self, "_robot_move_in_flight", False):
+            self._robot_move_sequence_queue.insert(0, (sentence_id, code, duration_sec))
+            return
+        if not getattr(self, "func_handler", None):
+            self.logger.bind(tag=TAG).warning("[mv] skip — func_handler missing")
+            self._robot_move_sequence_queue.insert(0, (sentence_id, code, duration_sec))
+            return
+        if not hasattr(self, "_executed_robot_moves"):
+            self._executed_robot_moves = set()
+
+        dedupe_key = (sentence_id, code, duration_sec)
+        if dedupe_key in self._executed_robot_moves:
+            self.logger.bind(tag=TAG).debug(
+                f"[mv] skip duplicate mv:{format_move_step(step)} sentence_id={sentence_id}"
+            )
+            self._pump_robot_move_queue()
+            return
+
+        available = self._robot_move_available_tools()
+        motor_tools = sorted(n for n in available if n and "motor" in n)
+        if not motor_tools:
+            motor_tools = sorted(
+                n for n in available if n and ("motor" in n or "chassis" in n)
+            )
+        self.logger.bind(tag=TAG).info(
+            f"[mv] available tools={len(available)} motor/chassis={motor_tools}"
+        )
+
+        tool_name, tool_args = build_mcp_call(step, available)
+        if not tool_name:
+            self.logger.bind(tag=TAG).warning(
+                f"[mv] mv:{format_move_step(step)} — no MCP tool yet "
+                f"(available={len(available)}), will retry"
+            )
+            if dedupe_key not in (self._pending_robot_moves or []):
+                self._pending_robot_moves.append(dedupe_key)
+            self._robot_move_sequence_queue.insert(0, (sentence_id, code, duration_sec))
+            return
+
+        self._executed_robot_moves.add(dedupe_key)
+        self._robot_move_in_flight = True
+        args_json = json.dumps(tool_args, ensure_ascii=False)
+        self.logger.bind(tag=TAG).info(
+            f"[mv] dispatch mv:{format_move_step(step)} → {tool_name} "
+            f"args={args_json} sentence_id={sentence_id}"
+        )
+
+        def _on_mv_tool_done(
+            fut, mv_step=step, tool=tool_name, mv_duration=duration_sec
+        ):
+            self._robot_move_in_flight = False
+            try:
+                result = fut.result()
+                action = getattr(result, "action", None)
+                payload = getattr(result, "result", None) or getattr(
+                    result, "response", None
+                )
+                self.logger.bind(tag=TAG).info(
+                    f"[mv] done mv:{format_move_step(mv_step)} → {tool} "
+                    f"action={action} result={payload}"
+                )
+            except Exception as exc:
+                self.logger.bind(tag=TAG).error(
+                    f"[mv] failed mv:{format_move_step(mv_step)} → {tool}: {exc}"
+                )
+            self._start_robot_move_cooldown(mv_duration if mv_step.code != "s" else None)
+            if (
+                self._robot_move_sequence_queue
+                and not getattr(self, "_robot_move_shutdown", False)
+                and not (getattr(self, "stop_event", None) and self.stop_event.is_set())
+            ):
+                self.logger.bind(tag=TAG).info(
+                    f"[mv] next in queue ({len(self._robot_move_sequence_queue)} waiting)"
+                )
+                self._schedule_robot_move_pump()
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.func_handler.handle_llm_function_call(
+                self, {"name": tool_name, "arguments": args_json}
+            ),
+            self.loop,
+        )
+        future.add_done_callback(_on_mv_tool_done)
+
+    def _dispatch_robot_move_codes_now(
+        self, sentence_id: str | None, codes: list[str]
+    ) -> None:
+        """Backward-compatible entry: enqueue then pump one-at-a-time."""
+        self._dispatch_robot_move_codes(sentence_id, codes)
+
+    def _dispatch_mv_from_assistant_text(
+        self, sentence_id: str | None, text: str, *, label: str = ""
+    ) -> None:
+        from core.utils.robot_move_codec import (
+            extract_move_codes,
+            extract_move_steps_from_assistant_reply,
+            format_move_step,
+        )
+
+        if not text:
+            return
+        steps = extract_move_steps_from_assistant_reply(
+            text,
+            default_sec=self._robot_move_default_duration(),
+            max_sec=self._robot_move_max_duration(),
+        )
+        if not steps:
+            return
+        if not extract_move_codes(text):
+            tag_repr = [format_move_step(s) for s in steps]
+            self.logger.bind(tag=TAG).info(
+                f"[mv] inferred ({label}): {tag_repr} «{text[:80]}»"
+            )
+        self._dispatch_robot_move_steps(sentence_id, steps)
+
+    def _prepare_llm_text_for_tts(
+        self, sentence_id: str | None, text: str, *, trim_edges: bool = False
+    ) -> str:
+        from core.utils.robot_move_codec import split_robot_move_tags
+
+        if not text:
+            return ""
+        cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
+        self._dispatch_mv_from_assistant_text(
+            sentence_id, text, label="prepare_llm_text_for_tts"
+        )
+        return cleaned
+
+    def _enqueue_tts_stream_part(
+        self, sentence_id: str | None, text: str, *, flush_hold: bool = False
+    ) -> None:
+        """Stream-safe TTS enqueue: holds incomplete trailing mv:* tags."""
+        from core.utils.robot_move_codec import (
+            finalize_stream_text_for_tts,
+            prepare_stream_chunk_for_tts,
+        )
+
+        if flush_hold:
+            held = getattr(self, "_move_tag_stream_hold", "") or ""
+            self._move_tag_stream_hold = ""
+            if held:
+                text = held + (text or "")
+
+        if not text and not flush_hold:
+            return
+
+        default_sec = self._robot_move_default_duration()
+        max_sec = self._robot_move_max_duration()
+
+        if flush_hold and text:
+            cleaned, steps = finalize_stream_text_for_tts(
+                text, default_sec=default_sec, max_sec=max_sec
+            )
+            hold = ""
+        else:
+            hold = getattr(self, "_move_tag_stream_hold", "") or ""
+            chunk = hold + text
+            cleaned, hold, steps = prepare_stream_chunk_for_tts(
+                chunk, default_sec=default_sec, max_sec=max_sec
+            )
+            self._move_tag_stream_hold = hold
+
+        if steps:
+            self._dispatch_robot_move_steps(sentence_id, steps)
+        elif cleaned:
+            self._dispatch_mv_from_assistant_text(
+                sentence_id, cleaned, label="tts_stream_chunk"
+            )
+        if cleaned:
+            self.tts.tts_text_queue.put(
+                TTSMessageDTO(
+                    sentence_id=sentence_id,
+                    sentence_type=SentenceType.MIDDLE,
+                    content_type=ContentType.TEXT,
+                    content_detail=cleaned,
+                )
+            )
+
+    def _flush_direct_answer_move_hold(
+        self, tc: dict, sentence_id: str | None, da_response: str
+    ) -> None:
+        from core.utils.robot_move_codec import finalize_stream_text_for_tts
+
+        hold = tc.get("_da_move_hold", "") or ""
+        parsed_len = tc.get("_da_parsed_len", 0)
+        tail = da_response[parsed_len:] if da_response else ""
+        pending = hold + tail
+        tc["_da_move_hold"] = ""
+        tc["_da_parsed_len"] = len(da_response or "")
+        if not pending:
+            return
+        pending = self._clean_response_garbage(pending)
+        tts_part, steps = finalize_stream_text_for_tts(
+            pending,
+            default_sec=self._robot_move_default_duration(),
+            max_sec=self._robot_move_max_duration(),
+        )
+        if steps:
+            self._dispatch_robot_move_steps(sentence_id, steps)
+        elif tts_part:
+            self._dispatch_mv_from_assistant_text(
+                sentence_id, tts_part, label="da_tail"
+            )
+        if tts_part:
+            self.tts.tts_text_queue.put(
+                TTSMessageDTO(
+                    sentence_id=sentence_id,
+                    sentence_type=SentenceType.MIDDLE,
+                    content_type=ContentType.TEXT,
+                    content_detail=tts_part,
+                )
+            )
 
     def _inject_tool_call_fewshot(self):
         """注入工具调用 few-shot 示例到对话历史。
@@ -701,6 +1243,45 @@ class ConnectionHandler:
         ))
         self.dialogue.put(Message(
             role="tool", tool_call_id=da_tc_id,
+            content="已直接回复", is_temporary=True,
+        ))
+
+        # 示例1b：robot mv tag（Kita quẹo trái → direct_answer + mv:t）
+        da_robot_id = "fewshot_da_robot_001"
+        self.dialogue.put(Message(role="user", content="Kita ơi quẹo trái", is_temporary=True))
+        self.dialogue.put(Message(
+            role="assistant",
+            tool_calls=[{
+                "id": da_robot_id,
+                "function": {
+                    "arguments": '{"response": "Mình đi sang trái rồi nha mv:t"}',
+                    "name": "direct_answer",
+                },
+                "type": "function", "index": 0,
+            }],
+            is_temporary=True,
+        ))
+        self.dialogue.put(Message(
+            role="tool", tool_call_id=da_robot_id,
+            content="已直接回复", is_temporary=True,
+        ))
+
+        da_robot_id2 = "fewshot_da_robot_002"
+        self.dialogue.put(Message(role="user", content="Quay phải đi", is_temporary=True))
+        self.dialogue.put(Message(
+            role="assistant",
+            tool_calls=[{
+                "id": da_robot_id2,
+                "function": {
+                    "arguments": '{"response": "Mình quay phải nha mv:p"}',
+                    "name": "direct_answer",
+                },
+                "type": "function", "index": 0,
+            }],
+            is_temporary=True,
+        ))
+        self.dialogue.put(Message(
+            role="tool", tool_call_id=da_robot_id2,
             content="已直接回复", is_temporary=True,
         ))
 
@@ -878,27 +1459,10 @@ class ConnectionHandler:
                 plugin_from_server = private_config.get("plugins", {})
                 for plugin, config_str in plugin_from_server.items():
                     plugin_from_server[plugin] = json.loads(config_str)
-                # 将模块级别的插件配置复制到各具体函数名，
-                # 方便后续 per-function 查找描述、news_sources 等配置
-                for module_name, func_names in module_func_map.items():
-                    if module_name in plugin_from_server:
-                        module_config = plugin_from_server[module_name]
-                        for func_name in func_names:
-                            if func_name not in plugin_from_server:
-                                plugin_from_server[func_name] = module_config
                 self.config["plugins"] = plugin_from_server
-                # 将模块级别的插件名展开为具体函数名
-                expanded_functions = []
-                for plugin_key in plugin_from_server.keys():
-                    if plugin_key in all_function_registry:
-                        expanded_functions.append(plugin_key)
-                    elif plugin_key in module_func_map:
-                        expanded_functions.extend(module_func_map[plugin_key])
-                    else:
-                        expanded_functions.append(plugin_key)
                 self.config["Intent"][self.config["selected_module"]["Intent"]][
                     "functions"
-                ] = expanded_functions
+                ] = plugin_from_server.keys()
         if private_config.get("prompt", None) is not None:
             self.config["prompt"] = private_config["prompt"]
         # 获取声纹信息
@@ -995,13 +1559,16 @@ class ConnectionHandler:
                 self.logger.bind(tag=TAG).info("使用主LLM作为意图识别模型")
 
     def _initialize_intent(self):
-        if self.intent is None:
-            return
-        self.intent_type = self.config["Intent"][
-            self.config["selected_module"]["Intent"]
-        ]["type"]
+        try:
+            self.intent_type = self.config["Intent"][
+                self.config["selected_module"]["Intent"]
+            ]["type"]
+        except (KeyError, TypeError):
+            pass
         if self.intent_type == "function_call" or self.intent_type == "intent_llm":
             self.load_function_plugin = True
+        if self.intent is None:
+            return
         """初始化意图识别模块"""
         # 获取意图识别配置
         intent_config = self.config["Intent"]
@@ -1036,12 +1603,28 @@ class ConnectionHandler:
                 self.intent.set_llm(self.llm)
                 self.logger.bind(tag=TAG).info("使用主LLM作为意图识别模型")
 
-        """加载统一工具处理器"""
-        self.func_handler = UnifiedToolHandler(self)
+        # func_handler 在 _initialize_components 中通过 _ensure_func_handler 统一创建
 
-        # 异步初始化工具处理器
-        if hasattr(self, "loop") and self.loop:
-            asyncio.run_coroutine_threadsafe(self.func_handler._initialize(), self.loop)
+    def _refresh_character_memory_prompt(self, user_text: str = "") -> None:
+        from core.characters.character_registry import (
+            get_active_character,
+            get_operational_prompt,
+            get_store,
+        )
+
+        character = get_active_character(self)
+        if not character:
+            return
+        get_store(character).prepare_turn(self.device_id or "default", user_text or "")
+        enhanced = self.prompt_manager.refresh_device_prompt(
+            get_operational_prompt(character),
+            self.device_id,
+            self.client_ip,
+            active_character=character,
+            emoji_enabled=(self.features or {}).get("emoji", True),
+        )
+        if enhanced:
+            self.change_system_prompt(enhanced)
 
     def change_system_prompt(self, prompt):
         self.prompt = prompt
@@ -1053,12 +1636,28 @@ class ConnectionHandler:
         current_sentence_id = None
 
         if query is not None:
+            self.last_activity_time = time.time() * 1000
             self.logger.bind(tag=TAG).info(f"大模型收到用户消息: {query}")
+            from core.characters.character_registry import get_active_character
+
+            if get_active_character(self):
+                self._last_user_text = query
+                self._kira_last_user_text = query
 
         # 为最顶层时新建会话ID和发送FIRST请求
         if depth == 0:
+            if query and get_active_character(self):
+                self._refresh_character_memory_prompt(query)
             current_sentence_id = str(uuid.uuid4().hex)
             self.sentence_id = current_sentence_id  # 更新共享属性
+            self._executed_robot_moves = set()
+            self._move_tag_stream_hold = ""
+            self._robot_move_sequence_queue = []
+            self._robot_move_in_flight = False
+            self._robot_move_pump_scheduled = False
+            self._robot_move_cooldown_until = 0.0
+            self._robot_move_shutdown = False
+            self._robot_move_pump_handle = None
             self.dialogue.put(Message(role="user", content=query))
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
@@ -1152,6 +1751,7 @@ class ConnectionHandler:
             for response in llm_responses:
                 if self.client_abort:
                     break
+                self.last_activity_time = time.time() * 1000
                 if self.intent_type == "function_call" and functions is not None:
                     content, tools_call = response
                     if "content" in response:
@@ -1169,26 +1769,46 @@ class ConnectionHandler:
                         self._merge_tool_calls(tool_calls_list, tools_call)
 
                     # 流式提取 direct_answer 的 response 参数，实时送 TTS
-                    # 使用安全缓冲区，防止 JSON 闭合符号泄漏到 TTS
-                    _DA_STREAM_BUFFER = 5
                     for tc in tool_calls_list:
                         if tc["name"] == "direct_answer" and tc.get("arguments"):
-                            da_text = self._extract_direct_answer_response(tc["arguments"])
-                            sent_len = tc.get("_da_sent", 0)
-                            if da_text and len(da_text) > sent_len:
-                                safe_end = max(sent_len, len(da_text) - _DA_STREAM_BUFFER)
-                                if safe_end > sent_len:
-                                    new_part = da_text[sent_len:safe_end]
-                                    # 清理 delta 中可能泄漏的 JSON 闭合垃圾
-                                    new_part = self._clean_response_garbage(new_part)
-                                    if new_part:
-                                        tc["_da_sent"] = safe_end
+                            da_text = self._extract_direct_answer_response(
+                                tc["arguments"]
+                            )
+                            parsed_len = tc.get("_da_parsed_len", 0)
+                            if da_text and len(da_text) > parsed_len:
+                                new_part = da_text[parsed_len:]
+                                new_part = self._clean_response_garbage(new_part)
+                                if new_part:
+                                    hold = tc.get("_da_move_hold", "") or ""
+                                    from core.utils.robot_move_codec import (
+                                        prepare_stream_chunk_for_tts,
+                                    )
+
+                                    chunk = hold + new_part
+                                    safe, new_hold, steps = prepare_stream_chunk_for_tts(
+                                        chunk,
+                                        default_sec=self._robot_move_default_duration(),
+                                        max_sec=self._robot_move_max_duration(),
+                                    )
+                                    tc["_da_move_hold"] = new_hold
+                                    tc["_da_parsed_len"] = len(da_text)
+                                    if steps:
+                                        self._dispatch_robot_move_steps(
+                                            current_sentence_id, steps
+                                        )
+                                    elif safe:
+                                        self._dispatch_mv_from_assistant_text(
+                                            current_sentence_id,
+                                            safe,
+                                            label="da_stream",
+                                        )
+                                    if safe:
                                         self.tts.tts_text_queue.put(
                                             TTSMessageDTO(
                                                 sentence_id=current_sentence_id,
                                                 sentence_type=SentenceType.MIDDLE,
                                                 content_type=ContentType.TEXT,
-                                                content_detail=new_part,
+                                                content_detail=safe,
                                             )
                                         )
                 else:
@@ -1206,14 +1826,11 @@ class ConnectionHandler:
                 if content is not None and len(content) > 0:
                     if not tool_call_flag:
                         response_message.append(content)
-                        self.tts.tts_text_queue.put(
-                            TTSMessageDTO(
-                                sentence_id=current_sentence_id,
-                                sentence_type=SentenceType.MIDDLE,
-                                content_type=ContentType.TEXT,
-                                content_detail=content,
+                        cleaned_part = self._clean_response_garbage(content)
+                        if cleaned_part:
+                            self._enqueue_tts_stream_part(
+                                current_sentence_id, cleaned_part
                             )
-                        )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM stream processing error: {e}")
             self.tts.tts_text_queue.put(
@@ -1273,26 +1890,28 @@ class ConnectionHandler:
                         f"模型选择 direct_answer，流式已播报，写入对话历史"
                     )
                     for tc in direct_answer_calls:
-                        da_response = self._extract_direct_answer_response(tc.get("arguments", "{}"))
+                        da_response = self._extract_direct_answer_response(
+                            tc.get("arguments", "{}")
+                        )
                         if da_response:
-                            # 刷新流式缓冲区中未发送的部分
-                            sent_len = tc.get("_da_sent", 0)
-                            remaining = da_response[sent_len:]
-                            if remaining:
-                                remaining = self._clean_response_garbage(remaining)
-                                if remaining:
-                                    self.tts.tts_text_queue.put(
-                                        TTSMessageDTO(
-                                            sentence_id=current_sentence_id,
-                                            sentence_type=SentenceType.MIDDLE,
-                                            content_type=ContentType.TEXT,
-                                            content_detail=remaining,
-                                        )
-                                    )
-                            # 写入对话历史
-                            da_response = self._clean_response_garbage(da_response)
+                            self._flush_direct_answer_move_hold(
+                                tc, current_sentence_id, da_response
+                            )
+                            da_clean = self._clean_response_garbage(da_response)
+                            self._dispatch_mv_from_assistant_text(
+                                current_sentence_id,
+                                da_clean,
+                                label="da_full",
+                            )
+                            # 写入对话历史（不含 mv: 控制码）
+                            da_response = da_clean
+                            da_response = self._prepare_llm_text_for_tts(
+                                current_sentence_id, da_response, trim_edges=True
+                            )
                             self.tts.store_tts_text(current_sentence_id, da_response)
-                            self.dialogue.put(Message(role="assistant", content=da_response))
+                            self.dialogue.put(
+                                Message(role="assistant", content=da_response)
+                            )
 
                     if not real_tool_calls:
                         if depth == 0:
@@ -1348,6 +1967,10 @@ class ConnectionHandler:
                     try:
                         result = future.result(timeout=tool_call_timeout)
                         tool_results.append((result, tool_call_data))
+                        self.logger.bind(tag=TAG).info(
+                            f"[tool] done {tool_call_data['name']} action={result.action} "
+                            f"result={result.result or result.response}"
+                        )
                         # 使用公共方法上报工具调用结果
                         enqueue_tool_report(self, tool_call_data['name'], tool_input, str(result.result) if result.result else None, report_tool_call=False)
 
@@ -1370,10 +1993,44 @@ class ConnectionHandler:
         # 存储对话内容
         if len(response_message) > 0:
             text_buff = "".join(response_message)
-            self.tts.store_tts_text(current_sentence_id, text_buff)
-            self.dialogue.put(Message(role="assistant", content=text_buff))
+            text_buff = self._prepare_llm_text_for_tts(
+                current_sentence_id, text_buff, trim_edges=True
+            )
+            if text_buff:
+                self.tts.store_tts_text(current_sentence_id, text_buff)
+                self.dialogue.put(Message(role="assistant", content=text_buff))
 
         if depth == 0:
+            from core.characters.character_registry import get_active_character, get_store
+
+            if get_active_character(self) and query:
+                character = get_active_character(self)
+
+                assistant = ""
+                if len(response_message) > 0:
+                    assistant = "".join(response_message)
+                elif self.dialogue.dialogue:
+                    for msg in reversed(self.dialogue.dialogue):
+                        if msg.role == "assistant" and msg.content:
+                            assistant = msg.content
+                            break
+                rude = bool(
+                    query
+                    and any(
+                        w in query.lower()
+                        for w in ("đồ ngu", "ngu si", "chó", "điên", "stupid", "shut up")
+                    )
+                )
+                get_store(character).after_turn(
+                    self.device_id or "default",
+                    query,
+                    assistant,
+                    rude=rude,
+                )
+
+            self._enqueue_tts_stream_part(
+                current_sentence_id, "", flush_hold=True
+            )
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=current_sentence_id,
@@ -1401,14 +2058,19 @@ class ConnectionHandler:
                 Action.ERROR,
             ]:
                 text = result.response if result.response else result.result
+                text = self._prepare_llm_text_for_tts(
+                    self.sentence_id, text or "", trim_edges=True
+                )
                 if streamed_text and text in streamed_text:
                     self.logger.bind(tag=TAG).debug(
                         f"Skipping duplicate TTS for tool {tool_call_data['name']}, already streamed"
                     )
                 else:
-                    self.tts.tts_one_sentence(self, ContentType.TEXT, content_detail=text)
-                    self.tts.store_tts_text(self.sentence_id, text)
-                self.dialogue.put(Message(role="assistant", content=text))
+                    if text:
+                        self.tts.tts_one_sentence(self, ContentType.TEXT, content_detail=text)
+                        self.tts.store_tts_text(self.sentence_id, text)
+                if text:
+                    self.dialogue.put(Message(role="assistant", content=text))
             elif result.action == Action.REQLLM:
                 need_llm_tools.append((result, tool_call_data))
             elif result.action == Action.RECORD:
@@ -1590,9 +2252,11 @@ class ConnectionHandler:
                         f"清理工具处理器时出错: {cleanup_error}"
                     )
 
-            # 触发停止事件
+            # 触发停止事件（阻止新的 motor/timer 回调）
             if self.stop_event:
                 self.stop_event.set()
+
+            self._shutdown_robot_moves()
 
             # 清空任务队列
             self.clear_queues()
@@ -1696,6 +2360,7 @@ class ConnectionHandler:
         self.client_voice_window.clear()
         self.last_is_voice = False
         self.vad_last_voice_time = 0.0
+        self.vad_speech_start_time = 0.0
 
         # Clear ASR buffers
         self.asr_audio.clear()
@@ -1724,7 +2389,11 @@ class ConnectionHandler:
                 # 检查是否超时（只有在时间戳已初始化的情况下）
                 if last_activity_time > 0.0:
                     current_time = time.time() * 1000
-                    if current_time - last_activity_time > self.timeout_seconds * 1000:
+                    if (
+                        not self.close_after_chat
+                        and current_time - last_activity_time
+                        > self.timeout_seconds * 1000
+                    ):
                         if not self.stop_event.is_set():
                             self.logger.bind(tag=TAG).info("连接超时，准备关闭")
                             # 设置停止事件，防止重复处理

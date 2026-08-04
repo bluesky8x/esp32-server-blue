@@ -28,15 +28,19 @@ export async function initMcpTools() {
     if (savedTools) {
         try {
             const parsedTools = JSON.parse(savedTools);
-            // 合并默认工具和用户保存的工具，保留用户自定义的工具
-            const defaultToolNames = new Set(defaultMcpTools.map(t => t.name));
-            // 添加默认工具中不存在的新工具
+            const mergedByName = new Map(defaultMcpTools.map(t => [t.name, t]));
+            // 保留用户自定义工具
             parsedTools.forEach(tool => {
-                if (!defaultToolNames.has(tool.name)) {
-                    defaultMcpTools.push(tool);
+                if (!mergedByName.has(tool.name)) {
+                    mergedByName.set(tool.name, tool);
                 }
             });
-            mcpTools = defaultMcpTools;
+            // 合并 default 中新增的工具（如 motor）
+            defaultMcpTools.forEach(tool => {
+                mergedByName.set(tool.name, tool);
+            });
+            mcpTools = Array.from(mergedByName.values());
+            saveMcpTools();
         } catch (e) {
             log('加载MCP工具失败，使用默认工具', 'warning');
             mcpTools = [...defaultMcpTools];
@@ -476,8 +480,81 @@ export function getMcpTools() {
 /**
  * 执行工具调用
  */
+function normalizeToolLookupName(toolName) {
+    return (toolName || '').replace(/\./g, '_');
+}
+
+function getMotorSimulatorAction(toolName) {
+    const key = normalizeToolLookupName(toolName);
+    const actions = {
+        self_motor_stop: 'stop',
+        self_motor_forward: 'forward',
+        self_motor_backward: 'backward',
+        self_motor_turn_left: 'turn_left',
+        self_motor_turn_right: 'turn_right',
+        self_motor_move: 'move',
+        self_chassis_turn_left: 'turn_left',
+        self_chassis_turn_right: 'turn_right',
+        self_chassis_go_forward: 'forward',
+        self_chassis_go_back: 'backward',
+    };
+    return actions[key] || null;
+}
+
+function runMotorSimulator(toolName, toolArgs = {}) {
+    const key = normalizeToolLookupName(toolName);
+    if (key === 'self_motor_move' && toolArgs) {
+        const left = toolArgs.left ?? 0;
+        const right = toolArgs.right ?? 0;
+        const durationMs = toolArgs.duration_ms ?? 5000;
+        let action = 'move';
+        if (left > 0 && right > 0) action = 'forward';
+        else if (left < 0 && right < 0) action = 'backward';
+        else if (left < 0 && right > 0) action = 'turn_left';
+        else if (left > 0 && right < 0) action = 'turn_right';
+        const sec = Math.round(durationMs / 1000);
+        const label = `🤖 ${action} ${sec}s (simulator)`;
+        log(`[motor sim] ${label}`, 'success');
+        if (typeof window.showMotorSimulation === 'function') {
+            window.showMotorSimulation(action, label);
+        }
+        return {
+            success: true,
+            action,
+            duration_ms: durationMs,
+            simulated: true,
+            message: label,
+        };
+    }
+    const action = getMotorSimulatorAction(toolName);
+    if (!action) {
+        return null;
+    }
+    const labels = {
+        stop: '🛑 Dừng motor (simulator)',
+        forward: '⬆️ Tiến (simulator)',
+        backward: '⬇️ Lùi (simulator)',
+        turn_left: '⬅️ Quay trái (simulator)',
+        turn_right: '➡️ Quay phải (simulator)',
+    };
+    const label = labels[action] || action;
+    log(`[motor sim] ${label}`, 'success');
+    if (typeof window.showMotorSimulation === 'function') {
+        window.showMotorSimulation(action, label);
+    }
+    return { success: true, action, simulated: true, message: label };
+}
+
 export async function executeMcpTool(toolName, toolArgs) {
-    const tool = mcpTools.find(t => t.name === toolName);
+    const motorResult = runMotorSimulator(toolName, toolArgs);
+    if (motorResult) {
+        return motorResult;
+    }
+
+    let tool = mcpTools.find(t => t.name === toolName);
+    if (!tool) {
+        tool = mcpTools.find(t => normalizeToolLookupName(t.name) === normalizeToolLookupName(toolName));
+    }
     if (!tool) {
         log(`未找到工具: ${toolName}`, 'error');
         return { success: false, error: `未知工具: ${toolName}` };

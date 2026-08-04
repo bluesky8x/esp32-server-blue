@@ -141,7 +141,8 @@ class MarkdownCleaner:
             # 保留原始空格，直接返回
             return text
 
-        return text.strip()
+        # 非 ASCII（如越南语）保留首尾空格，避免流式分片丢失词间距
+        return text
 
 def convert_percentage_to_range(percentage, min_val, max_val, base_val=None):
     """

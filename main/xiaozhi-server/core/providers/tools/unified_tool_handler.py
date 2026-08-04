@@ -70,10 +70,13 @@ class UnifiedToolHandler:
             self._initialize_home_assistant()
 
             self.finish_init = True
-            self.logger.debug("统一工具处理器初始化完成")
+            self.logger.info("统一工具处理器初始化完成")
 
             # 输出当前支持的所有工具列表
             self.current_support_functions()
+
+            if hasattr(self.conn, "_flush_pending_robot_moves"):
+                self.conn._flush_pending_robot_moves()
 
         except Exception as e:
             self.logger.error(f"统一工具处理器初始化失败: {e}")
@@ -166,7 +169,7 @@ class UnifiedToolHandler:
                         response="无法解析函数参数",
                     )
 
-            self.logger.debug(f"调用函数: {function_name}, 参数: {arguments}")
+            self.logger.info(f"[tool] start {function_name} args={arguments}")
 
             # 发送工具调用显示消息到设备
             try:
@@ -176,6 +179,10 @@ class UnifiedToolHandler:
 
             # 执行工具调用
             result = await self.tool_manager.execute_tool(function_name, arguments)
+            self.logger.info(
+                f"[tool] finished {function_name} action={result.action} "
+                f"result={result.result or result.response}"
+            )
             return result
 
         except Exception as e:

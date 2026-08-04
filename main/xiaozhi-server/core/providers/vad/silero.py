@@ -26,6 +26,8 @@ class VADProvider(VADProviderBase):
         threshold = config.get("threshold", "0.5")
         threshold_low = config.get("threshold_low", "0.2")
         min_silence_duration_ms = config.get("min_silence_duration_ms", "1000")
+        min_speech_duration_ms = config.get("min_speech_duration_ms", "400")
+        frame_window_threshold = config.get("frame_window_threshold", "3")
 
         self.vad_threshold = float(threshold) if threshold else 0.5
         self.vad_threshold_low = float(threshold_low) if threshold_low else 0.2
@@ -33,8 +35,12 @@ class VADProvider(VADProviderBase):
         self.silence_threshold_ms = (
             int(min_silence_duration_ms) if min_silence_duration_ms else 1000
         )
-
-        self.frame_window_threshold = 3
+        self.min_speech_duration_ms = (
+            int(min_speech_duration_ms) if min_speech_duration_ms else 400
+        )
+        self.frame_window_threshold = (
+            int(frame_window_threshold) if frame_window_threshold else 3
+        )
 
     def _init_connection_state(self, conn):
         """为连接初始化独立的 VAD 状态"""
@@ -99,17 +105,28 @@ class VADProvider(VADProviderBase):
                 # 更新滑动窗口
                 conn.client_voice_window.append(is_voice)
                 client_have_voice = (
-                    conn.client_voice_window.count(True) >= self.frame_window_threshold
+                    conn.client_voice_window.count(True)
+                    >= self.frame_window_threshold
                 )
+
+                now_ms = time.time() * 1000
+                if client_have_voice and not conn.client_have_voice:
+                    conn.vad_speech_start_time = now_ms
 
                 # 如果之前有声音，但本次没有声音，且与上次有声音的时间差已经超过了静默阈值，则认为已经说完一句话
                 if conn.client_have_voice and not client_have_voice:
-                    stop_duration = time.time() * 1000 - conn.vad_last_voice_time
-                    if stop_duration >= self.silence_threshold_ms:
+                    stop_duration = now_ms - conn.vad_last_voice_time
+                    speech_duration = now_ms - getattr(
+                        conn, "vad_speech_start_time", now_ms
+                    )
+                    if (
+                        stop_duration >= self.silence_threshold_ms
+                        and speech_duration >= self.min_speech_duration_ms
+                    ):
                         conn.client_voice_stop = True
                 if client_have_voice:
                     conn.client_have_voice = True
-                    conn.vad_last_voice_time = time.time() * 1000
+                    conn.vad_last_voice_time = now_ms
 
             return client_have_voice
         except Exception as e:

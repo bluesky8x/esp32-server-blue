@@ -86,5 +86,59 @@
             "brightness": "${brightness}",
             "message": "亮度已设置为 ${brightness}"
         }
+    },
+    {
+        "name": "self.motor.stop",
+        "description": "Stop all motors. Use for: dừng, dừng lại, stop.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "stop" }
+    },
+    {
+        "name": "self.motor.forward",
+        "description": "Move robot forward. Use for: đi tới, tiến, đi thẳng, go forward.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "forward" }
+    },
+    {
+        "name": "self.motor.backward",
+        "description": "Move robot backward. Use for: lùi, đi lùi, go back.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "backward" }
+    },
+    {
+        "name": "self.motor.turn_left",
+        "description": "Turn robot left in place. Use for: quay sang trái, rẽ trái, turn left.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "turn_left" }
+    },
+    {
+        "name": "self.motor.turn_right",
+        "description": "Turn robot right in place. Use for: quay sang phải, rẽ phải, turn right.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "turn_right" }
+    },
+    {
+        "name": "self.chassis.turn_left",
+        "description": "Turn left (chassis alias).",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "turn_left" }
+    },
+    {
+        "name": "self.chassis.turn_right",
+        "description": "Turn right (chassis alias).",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "turn_right" }
+    },
+    {
+        "name": "self.chassis.go_forward",
+        "description": "Move forward (chassis alias).",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "forward" }
+    },
+    {
+        "name": "self.chassis.go_back",
+        "description": "Move backward (chassis alias).",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "backward" }
     }
 ]

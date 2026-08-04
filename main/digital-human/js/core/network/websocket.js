@@ -20,6 +20,22 @@ export class WebSocketHandler {
         this.isRemoteSpeaking = false;
     }
 
+    sendListenMessage(state, mode = null) {
+        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+        const message = { type: 'listen', state };
+        if (this.currentSessionId) {
+            message.session_id = this.currentSessionId;
+        }
+        if (mode) {
+            message.mode = mode;
+        }
+        this.websocket.send(JSON.stringify(message));
+        log(`发送 listen ${state}${mode ? ` (${mode})` : ''}`, 'debug');
+        return true;
+    }
+
     // 发送hello握手消息
     async sendHelloMessage() {
         if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) return false;
@@ -33,6 +49,12 @@ export class WebSocketHandler {
                 device_name: config.deviceName,
                 device_mac: config.deviceMac,
                 token: config.token,
+                audio_params: {
+                    format: 'opus',
+                    sample_rate: 16000,
+                    channels: 1,
+                    frame_duration: 60
+                },
                 features: {
                     mcp: true,
                     emoji: config.emojiEnabled
@@ -159,6 +181,9 @@ export class WebSocketHandler {
             if (textWithoutEmoji && this.onChatMessage) {
                 this.onChatMessage(message.text, false);
             }
+        } else if (message.type === 'behavior') {
+            log(`行为树: ${(message.actions || []).join(', ')}`, 'info');
+            this.triggerLive2DBehavior(message.actions || []);
         } else if (message.type === 'mcp') {
             this.handleMCPMessage(message);
         } else {
@@ -170,11 +195,12 @@ export class WebSocketHandler {
     }
 
     // 处理TTS消息
-    handleTTSMessage(message) {
+    async handleTTSMessage(message) {
         if (message.state === 'start') {
             log('服务器开始发送语音', 'info');
             this.currentSessionId = message.session_id;
             this.isRemoteSpeaking = true;
+            await getAudioPlayer().ensureAudioReady();
             if (this.onSessionStateChange) {
                 this.onSessionStateChange(true);
             }
@@ -183,6 +209,7 @@ export class WebSocketHandler {
             this.startLive2DTalking();
         } else if (message.state === 'sentence_start') {
             log(`服务器发送语音段: ${message.text}`, 'info');
+            await getAudioPlayer().ensureAudioReady();
             this.ttsSentenceCount = (this.ttsSentenceCount || 0) + 1;
 
             if (message.text && this.onChatMessage) {
@@ -199,11 +226,7 @@ export class WebSocketHandler {
 
             // 句子结束时不清除动画，等待下一个句子或最终停止
         } else if (message.state === 'stop') {
-            log('服务器语音传输结束，清空所有音频缓冲', 'info');
-
-            // 清空所有音频缓冲并停止播放
-            const audioPlayer = getAudioPlayer();
-            audioPlayer.clearAllAudio();
+            log('服务器语音传输结束', 'info');
 
             this.isRemoteSpeaking = false;
             if (this.onRecordButtonStateChange) {
@@ -374,6 +397,7 @@ export class WebSocketHandler {
     // 处理二进制消息
     async handleBinaryMessage(data) {
         try {
+            await getAudioPlayer().ensureAudioReady();
             let arrayBuffer;
             if (data instanceof ArrayBuffer) {
                 arrayBuffer = data;
@@ -416,6 +440,7 @@ export class WebSocketHandler {
             // 设置录音器的WebSocket
             const audioRecorder = getAudioRecorder();
             audioRecorder.setWebSocket(this.websocket);
+            audioRecorder.onListenStop = () => this.sendListenMessage('stop');
 
             this.setupEventHandlers();
 
@@ -524,8 +549,11 @@ export class WebSocketHandler {
         }
 
         try {
-            // 如果对方正在说话，先发送打断消息
-            if (this.isRemoteSpeaking && this.currentSessionId) {
+            const wakeText = text.trim().toLowerCase();
+            const isCharacterWake = /^(hey\s+)?(kira|lili|coka)(\s|$|ơi)/i.test(wakeText);
+
+            // 角色切换唤醒词：不要先发 abort，否则服务端 client_abort 会跳过 TTS
+            if (this.isRemoteSpeaking && this.currentSessionId && !isCharacterWake) {
                 const abortMessage = {
                     session_id: this.currentSessionId,
                     type: 'abort',
@@ -566,6 +594,22 @@ export class WebSocketHandler {
             }
         } catch (error) {
             log(`触发Live2D情绪动作失败: ${error.message}`, 'error');
+        }
+    }
+
+    /**
+     * Behavior Engine → Live2D motions (turn, nod, etc.)
+     * @param {string[]} actions
+     */
+    triggerLive2DBehavior(actions) {
+        try {
+            const live2dManager = window.chatApp?.live2dManager;
+            if (live2dManager && typeof live2dManager.triggerBehaviorActions === 'function') {
+                live2dManager.triggerBehaviorActions(actions);
+                log(`触发Live2D行为: ${actions.join(', ')}`, 'info');
+            }
+        } catch (error) {
+            log(`触发Live2D行为失败: ${error.message}`, 'error');
         }
     }
 
