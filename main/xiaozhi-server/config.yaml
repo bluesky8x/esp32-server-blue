@@ -64,7 +64,7 @@ tts_timeout: 10
 # 工具调用超时时间(秒)
 tool_call_timeout: 30
 # 开启唤醒词加速
-enable_wakeup_words_response_cache: true
+enable_wakeup_words_response_cache: false
 # 开场是否回复唤醒词
 enable_greeting: true
 # 说完话是否开启提示音
@@ -85,11 +85,25 @@ exit_commands:
   - "退出"
   - "关闭"
 
+# Blue V1 — Kira character + motor/locale defaults
+character: kira
+
 # Blue V1 — pause between sequential motor steps (seconds)
 robot_move_step_delay_seconds: 5
 robot_move_default_duration_seconds: 5
 robot_move_max_duration_seconds: 30
 robot_move_max_sequence: 3
+
+# Runtime locale (vi / en) — ASR + TTS switch per connection when user language changes
+language_runtime:
+  default_locale: vi
+  locales:
+    vi:
+      asr_language: vi
+      tts_voice: vi-VN-HoaiMyNeural
+    en:
+      asr_language: en
+      tts_voice: en-US-JennyNeural
 
 xiaozhi:
   type: hello
@@ -98,7 +112,7 @@ xiaozhi:
   audio_params:
     format: opus
     # Opus支持的采样率范围为[8000, 12000, 16000, 24000, 48000]
-    sample_rate: 24000
+    sample_rate: 16000
     channels: 1
     frame_duration: 60
 
@@ -111,17 +125,21 @@ module_test:
 
 # 唤醒词，用于识别唤醒词还是讲话内容
 wakeup_words:
-  - "你好小智"
-  - "嘿你好呀"
-  - "你好小志"
-  - "小爱同学"
-  - "你好小鑫"
-  - "你好小新"
-  - "小美同学"
-  - "小龙小龙"
-  - "喵喵同学"
-  - "小滨小滨"
-  - "小冰小冰"
+  - kira
+  - hey kira
+  - kira ơi
+
+character_wake_map:
+  kira:
+    - kira
+    - hey kira
+    - kira ơi
+  lili:
+    - lili
+    - hey lili
+    - lili ơi
+    - coka
+    - coka ơi
 # MCP接入点地址，地址格式为：ws://你的mcp接入点ip或者域名:端口号/mcp/?token=你的token
 # 详细教程 https://github.com/xinnan-tech/xiaozhi-esp32-server/blob/main/docs/mcp-endpoint-integration.md
 mcp_endpoint: 你的接入点 websocket地址
@@ -144,7 +162,7 @@ plugins:
   get_weather:
     api_host: "mj7p3y7naa.re.qweatherapi.com"
     api_key: "a861d0d5e7bf4ee1a83d9a9e4f96d4da"
-    default_location: "广州"
+    default_location: "Ho Chi Minh City"
   # 获取新闻插件的配置，这里根据需要的新闻类型传入对应的url链接，默认支持社会、科技、财经新闻
   # 更多类型的新闻列表查看 https://www.chinanews.com.cn/rss/
   get_news_from_chinanews:
@@ -225,7 +243,7 @@ prompt: |
 prompt_template: agent-base-prompt.txt
 
 # 系统错误时的回复
-system_error_response: "主人，小智现在有点忙，我们稍后再试吧。"
+system_error_response: "Sorry — I lost that for a second. Could you say it again?"
 
 # 结束语prompt
 end_prompt:
@@ -238,10 +256,10 @@ end_prompt:
 selected_module:
   # 语音活动检测模块，默认使用SileroVAD模型
   VAD: SileroVAD
-  # 语音识别模块，默认使用FunASR本地模型
-  ASR: FunASR
+  # 语音识别模块 — Blue V1 uses OpenAI (see OpenaiASR); FunASR available offline
+  ASR: OpenaiASR
   # 将根据配置名称对应的type调用实际的LLM适配器
-  LLM: ChatGLMLLM
+  LLM: GeminiLLM
   # 视觉语言大模型
   VLLM: ChatGLMVLLM
   # TTS将根据配置名称对应的type调用实际的TTS适配器
@@ -253,7 +271,7 @@ selected_module:
   # 意图识别可使用intent_llm。优点：通用性强，缺点：增加串行前置意图识别模块，会增加处理时间，支持控制音量大小等iot操作
   # 意图识别可使用function_call，缺点：需要所选择的LLM支持function_call，优点：按需调用工具、速度快，理论上能全部操作所有iot指令
   # 默认免费的ChatGLMLLM就已经支持function_call，但是如果像追求稳定建议把LLM设置成：DoubaoLLM，使用的具体model_name是：doubao-1-5-pro-32k-250115
-  Intent: function_call
+  Intent: nointent
 
 # 意图识别，是用于理解用户意图的模块，例如：播放音乐
 Intent:
@@ -520,7 +538,7 @@ ASR:
     base_url: https://api.openai.com/v1/audio/transcriptions
     model_name: gpt-4o-mini-transcribe
     language: vi
-    prompt: "Vietnamese (tiếng Việt) or English only. Not Thai. Use Vietnamese diacritics. Omit fillers."
+    prompt: "Vietnamese (tiếng Việt) or English only. Not Thai. Use Vietnamese diacritics. Omit fillers: um, uh, ừ, ờ. Do not transcribe background music, song lyrics, TV, or noise. If only music/noise is heard, return empty."
     output_dir: tmp/
   GroqASR:
     # Groq语音识别服务，需要先在Groq Console创建API密钥
@@ -613,10 +631,12 @@ ASR:
 VAD:
   SileroVAD:
     type: silero
-    threshold: 0.5
-    threshold_low: 0.3
+    threshold: 0.58
+    threshold_low: 0.32
     model_dir: models/snakers4_silero-vad
-    min_silence_duration_ms: 200  # 如果说话停顿比较长，可以把这个值设置大一些
+    min_silence_duration_ms: 1200
+    min_speech_duration_ms: 500
+    frame_window_threshold: 4
 
 LLM:
   # 所有openai类型均可以修改超参，以AliLLM为例
@@ -661,6 +681,32 @@ LLM:
     model_name: deepseek-chat
     url: https://api.deepseek.com
     api_key: 你的deepseek web key
+  GeminiLLM:
+    type: gemini
+    # Google AI Gemini — v1beta generateContent
+    # API key: https://aistudio.google.com/apikey
+    # New accounts: 2.5-flash* returns 404; gemini-flash-latest → 3.6-flash (~20 req/day free).
+    api_key: 你的gemini web key
+    model_name: gemini-3.5-flash-lite
+    # Optional fallbacks if model_name is unavailable (Gemini provider only)
+    fallback_models:
+      - gemini-3.5-flash
+      - gemini-3.1-flash-lite
+    temperature: 0.7
+    max_tokens: 120
+    timeout: 120
+    quota_retries: 2
+    timeout_retries: 2
+    http_proxy: ""
+    https_proxy: ""
+  OpenAILLM:
+    # Optional — ChatGPT API (override selected_module.LLM in data/.config.yaml)
+    type: openai
+    base_url: https://api.openai.com/v1
+    model_name: gpt-4o-mini
+    api_key: 你的OpenAI API密钥
+    temperature: 0.7
+    max_tokens: 120
   ChatGLMLLM:
     # 定义LLM API类型
     type: openai
@@ -685,16 +731,6 @@ LLM:
     # 使用workflows进行返回的时候输入参数为 query 返回参数的名字要设置为 answer
     # 文本生成的默认输入参数也是query
     mode: chat-messages
-  GeminiLLM:
-    type: gemini
-    # 谷歌Gemini API，需要先在Google Cloud控制台创建API密钥并获取api_key
-    # 若在中国境内使用，请遵守《生成式人工智能服务管理暂行办法》
-    # token申请地址： https://aistudio.google.com/apikey
-    # 若部署地无法访问接口，需要开启科学上网
-    api_key: 你的gemini web key
-    model_name: "gemini-2.0-flash"
-    http_proxy: ""  #"http://127.0.0.1:10808"
-    https_proxy: "" #http://127.0.0.1:10808"
   CozeLLM:
     # 定义LLM API类型
     type: coze

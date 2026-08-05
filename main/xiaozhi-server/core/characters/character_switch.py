@@ -113,7 +113,9 @@ def apply_active_character(conn: "ConnectionHandler", character_id: str) -> bool
     conn.config["prompt"] = get_operational_prompt(character_id)
     conn._character_switch_until = time.time() + 2.0
 
-    voice = get_tts_voice(character_id, conn.config)
+    voice = get_tts_voice(
+        character_id, conn.config, getattr(conn, "active_locale", "vi")
+    )
     if voice and getattr(conn, "tts", None) and hasattr(conn.tts, "voice"):
         conn.tts.voice = voice
 

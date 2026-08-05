@@ -22,6 +22,7 @@ class ASRProvider(ASRProviderBase):
         self.output_dir = config.get("output_dir")
         self.delete_audio_file = delete_audio_file
         self.language = config.get("language") or None
+        self._default_language = self.language
         self.prompt = config.get("prompt") or (
             "Vietnamese (tiếng Việt) or English only. "
             "Do not transcribe as Thai. "
@@ -30,6 +31,7 @@ class ASRProvider(ASRProviderBase):
             "Do not transcribe background music, song lyrics, TV, or noise. "
             "If only music or noise is heard, return empty."
         )
+        self._default_prompt = self.prompt
 
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -72,7 +74,7 @@ class ASRProvider(ASRProviderBase):
 
             if response.status_code == 200:
                 text = response.json().get("text", "")
-                if text and _THAI_RE.search(text):
+                if text and _THAI_RE.search(text) and (self.language or "vi") == "vi":
                     logger.bind(tag=TAG).warning(
                         f"ASR returned Thai script, retrying with language=vi: {text[:80]}"
                     )

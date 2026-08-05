@@ -32,15 +32,17 @@ def get_display_name(character: str) -> str:
     return character.title()
 
 
-def get_tts_voice(character: str, config: dict | None = None) -> str | None:
+def get_tts_voice(
+    character: str, config: dict | None = None, locale: str | None = None
+) -> str | None:
     """Per-character Edge TTS voice (optional override in config)."""
+    from core.utils.language_runtime import resolve_tts_voice
+
     character = resolve_character_id(character) or character.lower()
-    if config:
-        voices = config.get("character_tts_voice") or {}
-        if isinstance(voices, dict):
-            for key in (character, *CHARACTER_ALIASES):
-                if key in voices:
-                    return str(voices[key])
+    loc = locale or "vi"
+    voice = resolve_tts_voice(character, config, loc)
+    if voice:
+        return voice
     if character == "lili":
         return "vi-VN-HoaiMyNeural"
     if character == "kira":

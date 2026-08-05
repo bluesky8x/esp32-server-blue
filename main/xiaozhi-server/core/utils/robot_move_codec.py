@@ -81,7 +81,10 @@ _INFER_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (re.compile(r"lùi(?:\s+lại)?|đi\s+lùi|quay\s+lại", re.IGNORECASE), "b"),
     (
-        re.compile(r"đi\s+tới|tiến(?:\s+lên)?|đi\s+thẳng|đi\s+lên", re.IGNORECASE),
+        re.compile(
+            r"đi\s+tới|tiến(?!g)(?:\s+lên)?|đi\s+thẳng|đi\s+lên",
+            re.IGNORECASE,
+        ),
         "f",
     ),
     (re.compile(r"dừng(?:\s+lại)?", re.IGNORECASE), "s"),
@@ -199,13 +202,31 @@ def infer_mv_codes_from_reply(text: str) -> list[str]:
     return infer_mv_codes_multi(text)[:1]
 
 
+def user_requested_robot_move(text: str) -> bool:
+    """True when the user turn is asking the robot to move (not general chat)."""
+    if not text or not str(text).strip():
+        return False
+    t = str(text).strip()
+    if extract_move_codes(t):
+        return True
+    if _REFUSAL_RE.search(t) or _CAPABILITY_RE.search(t):
+        return False
+    return bool(infer_mv_codes_multi(t))
+
+
 def extract_move_steps_from_assistant_reply(
     text: str,
     *,
     default_sec: int = DEFAULT_ROBOT_MOVE_DURATION_SEC,
     max_sec: int = MAX_ROBOT_MOVE_DURATION_SEC,
+    allow_inference: bool = True,
 ) -> list[RobotMoveStep]:
     explicit = extract_move_steps(text, default_sec=default_sec, max_sec=max_sec)
+    if explicit:
+        return limit_robot_move_steps(explicit)
+    if not allow_inference:
+        return []
+
     spoken = strip_move_tags(text or "", trim_edges=True)
     inferred_codes = infer_mv_codes_multi(spoken)
     inferred_duration = infer_duration_from_text(spoken, max_sec=max_sec)
@@ -365,11 +386,15 @@ def finalize_stream_text_for_tts(
     *,
     default_sec: int = DEFAULT_ROBOT_MOVE_DURATION_SEC,
     max_sec: int = MAX_ROBOT_MOVE_DURATION_SEC,
+    allow_inference: bool = True,
 ) -> tuple[str, list[RobotMoveStep]]:
     cleaned = strip_move_tags(text or "", trim_edges=False)
     steps = extract_move_steps(text or "", default_sec=default_sec, max_sec=max_sec)
     if not steps:
         steps = extract_move_steps_from_assistant_reply(
-            cleaned, default_sec=default_sec, max_sec=max_sec
+            cleaned,
+            default_sec=default_sec,
+            max_sec=max_sec,
+            allow_inference=allow_inference,
         )
     return cleaned, steps

@@ -207,6 +207,11 @@ class ConnectionHandler:
         # 标记连接是否来自MQTT
         self.conn_from_mqtt_gateway = False
 
+        from core.utils.language_runtime import default_locale
+
+        self.active_locale = default_locale(self.config)
+        self.normalize_vietnamese_tts = self.active_locale == "vi"
+
         # 初始化提示词管理器
         self.prompt_manager = PromptManager(self.config, self.logger)
 
@@ -623,9 +628,11 @@ class ConnectionHandler:
             if self.tts is None:
                 self.tts = self._initialize_tts()
             if self.tts and self.active_character:
-                from core.characters.character_registry import get_tts_voice
+                from core.utils.language_runtime import resolve_tts_voice
 
-                voice = get_tts_voice(self.active_character, self.config)
+                voice = resolve_tts_voice(
+                    self.active_character, self.config, self.active_locale
+                )
                 if voice and hasattr(self.tts, "voice"):
                     self.tts.voice = voice
             # 打开语音合成通道
@@ -655,6 +662,10 @@ class ConnectionHandler:
                 self.vad = self._vad
             if self.asr is None:
                 self.asr = self._initialize_asr()
+
+            from core.utils.language_runtime import apply_locale_to_connection
+
+            apply_locale_to_connection(self, self.active_locale, reason="init")
 
             # 初始化声纹识别
             self._initialize_voiceprint()
@@ -690,6 +701,7 @@ class ConnectionHandler:
             self.client_ip,
             active_character=self.active_character,
             emoji_enabled=(self.features or {}).get("emoji", True),
+            locale=getattr(self, "active_locale", "vi"),
         )
         if enhanced_prompt:
             self.change_system_prompt(enhanced_prompt)
@@ -1097,10 +1109,12 @@ class ConnectionHandler:
 
         if not text:
             return
+        allow_inference = bool(getattr(self, "_user_requested_move", False))
         steps = extract_move_steps_from_assistant_reply(
             text,
             default_sec=self._robot_move_default_duration(),
             max_sec=self._robot_move_max_duration(),
+            allow_inference=allow_inference,
         )
         if not steps:
             return
@@ -1147,7 +1161,10 @@ class ConnectionHandler:
 
         if flush_hold and text:
             cleaned, steps = finalize_stream_text_for_tts(
-                text, default_sec=default_sec, max_sec=max_sec
+                text,
+                default_sec=default_sec,
+                max_sec=max_sec,
+                allow_inference=bool(getattr(self, "_user_requested_move", False)),
             )
             hold = ""
         else:
@@ -1160,9 +1177,9 @@ class ConnectionHandler:
 
         if steps:
             self._dispatch_robot_move_steps(sentence_id, steps)
-        elif cleaned:
+        elif cleaned and flush_hold:
             self._dispatch_mv_from_assistant_text(
-                sentence_id, cleaned, label="tts_stream_chunk"
+                sentence_id, cleaned, label="tts_stream_final"
             )
         if cleaned:
             self.tts.tts_text_queue.put(
@@ -1622,6 +1639,7 @@ class ConnectionHandler:
             self.client_ip,
             active_character=character,
             emoji_enabled=(self.features or {}).get("emoji", True),
+            locale=getattr(self, "active_locale", "vi"),
         )
         if enhanced:
             self.change_system_prompt(enhanced)
@@ -1637,7 +1655,20 @@ class ConnectionHandler:
 
         if query is not None:
             self.last_activity_time = time.time() * 1000
-            self.logger.bind(tag=TAG).info(f"大模型收到用户消息: {query}")
+            from core.utils.language_runtime import update_locale_from_user_text
+            from core.utils.robot_move_codec import user_requested_robot_move
+
+            update_locale_from_user_text(self, query, reason="chat")
+            if depth == 0:
+                self._user_requested_move = user_requested_robot_move(query)
+            self.logger.bind(tag=TAG).info(
+                f"大模型收到用户消息: {query} [locale={getattr(self, 'active_locale', 'vi')}]"
+                + (
+                    f" [move_intent={self._user_requested_move}]"
+                    if depth == 0
+                    else ""
+                )
+            )
             from core.characters.character_registry import get_active_character
 
             if get_active_character(self):
@@ -1729,6 +1760,7 @@ class ConnectionHandler:
                         memory_str, self.config.get("voiceprint", {}), speaker_for_system
                     ),
                     functions=functions,
+                    locale=getattr(self, "active_locale", "vi"),
                 )
             else:
                 llm_responses = self.llm.response(
@@ -1736,6 +1768,7 @@ class ConnectionHandler:
                     self.dialogue.get_llm_dialogue_with_memory(
                         memory_str, self.config.get("voiceprint", {}), speaker_for_system
                     ),
+                    locale=getattr(self, "active_locale", "vi"),
                 )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")

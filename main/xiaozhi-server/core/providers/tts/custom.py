@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import requests
+from typing import Any
 from config.logger import setup_logging
 from datetime import datetime
 from core.providers.tts.base import TTSProviderBase
@@ -18,6 +19,9 @@ class TTSProvider(TTSProviderBase):
         self.audio_file_type = config.get("format", "wav")
         self.output_file = config.get("output_dir", "tmp/")
         self.params = config.get("params")
+        self.default_voice = config.get("default_voice", "default")
+        self.voice = config.get("voice") or self.default_voice
+        self.speeches_voice = config.get("speeches_voice", self.default_voice)
 
         if isinstance(self.params, str):
             try:
@@ -30,17 +34,35 @@ class TTSProvider(TTSProviderBase):
     def generate_filename(self):
         return os.path.join(self.output_file, f"tts-{datetime.now().date()}@{uuid.uuid4().hex}.{self.audio_file_type}")
 
+    def _resolve_param(self, value, text: str) -> Any:
+        if not isinstance(value, str):
+            return value
+        model = getattr(self, "voice", None) or self.default_voice
+        voice = getattr(self, "speeches_voice", None) or self.default_voice
+        replacements = {
+            "{prompt_text}": text,
+            "{model}": str(model),
+            "{voice}": str(voice),
+        }
+        for token, repl in replacements.items():
+            if token in value:
+                value = value.replace(token, repl)
+        return value
+
     async def text_to_speak(self, text, output_file):
         request_params = {}
         for k, v in self.params.items():
-            if isinstance(v, str) and "{prompt_text}" in v:
-                v = v.replace("{prompt_text}", text)
-            request_params[k] = v
+            request_params[k] = self._resolve_param(v, text)
 
+        timeout = getattr(self, "tts_timeout", 15)
         if self.method.upper() == "POST":
-            resp = requests.post(self.url, json=request_params, headers=self.headers)
+            resp = requests.post(
+                self.url, json=request_params, headers=self.headers, timeout=timeout
+            )
         else:
-            resp = requests.get(self.url, params=request_params, headers=self.headers)
+            resp = requests.get(
+                self.url, params=request_params, headers=self.headers, timeout=timeout
+            )
         if resp.status_code == 200:
             if output_file:
                 with open(output_file, "wb") as file:

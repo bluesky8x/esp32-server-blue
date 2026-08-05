@@ -275,14 +275,25 @@ class PromptManager:
                         or ""
                     )
 
-            # 获取TTS选择的语言，默认值为中文
-            language = (
-                self.config.get("TTS", {})
-                .get(self.config.get("selected_module", {}).get("TTS", ""), {})
-                .get("language")
-                or "中文"
+            # Locale-aware reply language (ASR/TTS runtime — not static TTS.language)
+            from core.utils.language_runtime import (
+                get_locale_profile,
+                resolve_llm_reply_directive,
             )
-            self.logger.bind(tag=TAG).debug(f"获取到选择的语言: {language}")
+
+            locale = str(kwargs.get("locale") or "vi").lower()
+            if locale not in ("vi", "en"):
+                locale = "vi"
+            render_kwargs = dict(kwargs)
+            render_kwargs.pop("locale", None)
+            locale_profile = get_locale_profile(self.config, locale)
+            language = locale_profile.get("tts_language_label") or (
+                "English" if locale == "en" else "越南语"
+            )
+            locale_directive = resolve_llm_reply_directive(self.config, locale)
+            self.logger.bind(tag=TAG).debug(
+                f"Prompt locale={locale}, reply language={language}"
+            )
 
             # 替换模板变量
             template = Template(self.base_prompt_template)
@@ -311,13 +322,17 @@ class PromptManager:
                 client_ip=client_ip,
                 dynamic_context=self.context_data,
                 language=language,
+                locale=locale,
+                locale_directive=locale_directive,
                 character_context=character_context,
                 character_name=character_name,
                 kira_context=character_context,
                 *args,
-                **kwargs,
+                **render_kwargs,
             )
-            device_cache_key = f"device_prompt:{device_id}:{character or 'default'}"
+            device_cache_key = (
+                f"device_prompt:{device_id}:{character or 'default'}:{locale}"
+            )
             self.cache_manager.set(
                 self.CacheType.DEVICE_PROMPT, device_cache_key, enhanced_prompt
             )
@@ -335,7 +350,10 @@ class PromptManager:
     ) -> str:
         """Rebuild and cache device prompt (e.g. after memory or character switch)."""
         active_character = kwargs.get("active_character") or self.config.get("character")
-        device_cache_key = f"device_prompt:{device_id}:{active_character or 'default'}"
+        locale = str(kwargs.get("locale") or "vi").lower()
+        device_cache_key = (
+            f"device_prompt:{device_id}:{active_character or 'default'}:{locale}"
+        )
         self.cache_manager.delete(self.CacheType.DEVICE_PROMPT, device_cache_key)
         return self.build_enhanced_prompt(
             user_prompt, device_id, client_ip, **kwargs

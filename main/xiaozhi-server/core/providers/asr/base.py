@@ -117,6 +117,9 @@ class ASRProviderBase(ABC):
                 wav_data = self._pcm_to_wav(combined_pcm_data)
 
             # 定义ASR任务
+            from core.utils.language_runtime import prepare_asr_for_next_turn
+
+            prepare_asr_for_next_turn(conn)
             asr_task = self.speech_to_text_wrapper(
                 asr_audio_task, conn.session_id
             )

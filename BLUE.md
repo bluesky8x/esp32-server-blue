@@ -20,8 +20,8 @@ pip install -r requirements.txt
 
 # Config (local, gitignored)
 mkdir -p data tmp
-cp data/.config.yaml.example data/.config.yaml
-# Edit data/.config.yaml — set OpenAI API key + LAN websocket URL
+cp data/.config.yaml.example data/.config.yaml   # or: ./run.sh auto-creates on first run
+# Edit data/.config.yaml — Gemini API key + OpenAI ASR key + LAN websocket URL
 
 # ASR model (optional if using OpenaiASR only)
 # Download model.pt → models/SenseVoiceSmall/model.pt
@@ -41,8 +41,54 @@ Point the ESP32 OTA / WiFi config at that URL. Pin maps: [Blue V2 wiring](../esp
 ## Blue-specific features
 
 - **Kira character** — `core/characters/` (personality, memory, wake-word switch)
+- **Gemini Flash brain** — `GeminiLLM` / `gemini-flash-latest` (`generativelanguage.googleapis.com` v1beta)
 - **Robot motion tags** — LLM output includes `mv:*` codes; server dispatches via MCP to firmware motor tools (`core/utils/robot_move_codec.py`)
 - **Vietnamese voice** — Edge TTS `vi-VN-HoaiMyNeural`, OpenAI ASR with Vietnamese prompt
+
+- **Vietnamese / English runtime** — auto-switch ASR + TTS voice per user message (`language_runtime` in config)
+
+## LLM (Gemini Flash)
+
+| Component | Config |
+|-----------|--------|
+| Provider | `selected_module.LLM: GeminiLLM` |
+| Model | `gemini-flash-latest` |
+| API | [Google AI Studio key](https://aistudio.google.com/apikey) in `data/.config.yaml` |
+
+```yaml
+LLM:
+  GeminiLLM:
+    api_key: YOUR_GEMINI_API_KEY
+```
+
+If Gemini is blocked from your network, add proxy under `GeminiLLM` (`http_proxy` / `https_proxy` in `config.yaml`).
+
+## Language runtime (vi / en)
+
+Default stack is optimized for **Vietnamese**. When the user speaks/writes **English**, the server switches **per WebSocket connection** (sticky until switched back):
+
+| Component | Vietnamese (`vi`) | English (`en`) |
+|-----------|-------------------|----------------|
+| ASR `language` | `vi` | `en` |
+| ASR prompt | Vietnamese diacritics, anti-Thai | English-only |
+| TTS voice | `vi-VN-HoaiMyNeural` | `en-US-JennyNeural` |
+| TTS normalize | Vietnamese spacing fixes | off |
+
+Detection: diacritics / Vietnamese keywords → `vi`; mostly ASCII → `en`. Explicit: *"speak English"*, *"nói tiếng anh"*.
+
+```yaml
+language_runtime:
+  default_locale: vi
+  locales:
+    vi:
+      asr_language: vi
+      tts_voice: vi-VN-HoaiMyNeural
+    en:
+      asr_language: en
+      tts_voice: en-US-JennyNeural
+```
+
+Log: `[locale] vi → en (user_text)` on switch.
 
 ## Robot motion (`mv:*`)
 
@@ -94,6 +140,73 @@ User speech → ASR → LLM (Kira) → reply + mv:* tags
 ```
 
 Implementation: `core/connection.py`, `core/utils/robot_move_codec.py`, `core/characters/kira.py`.
+
+## Local TTS (Piper / Speaches — low latency)
+
+Run Piper voices **on your Mac** via [Speaches](https://speaches.ai/) Docker (OpenAI-compatible API). No Edge TTS cloud hop → typically **~0.3–1 s** synthesis from Vietnam.
+
+### 1. Start TTS container + download models
+
+From repo root:
+
+```bash
+chmod +x run-tts.sh
+./run-tts.sh setup    # pull image, start on :8881, download vi + en Piper models
+./run-tts.sh test     # writes /tmp/blue-tts-vi.wav and /tmp/blue-tts-en.wav
+```
+
+| Model | HuggingFace ID |
+|-------|----------------|
+| Vietnamese | `speaches-ai/piper-vi_VN-25hours_single-low` |
+| English | `speaches-ai/piper-en_US-lessac-medium` |
+
+Override with env: `TTS_VI_MODEL`, `TTS_EN_MODEL`, `TTS_HOST_PORT` (default `8881`).
+
+### 2. Point xiaozhi-server at local TTS
+
+In `main/xiaozhi-server/data/.config.yaml`:
+
+```yaml
+selected_module:
+  TTS: CustomTTS
+
+language_runtime:
+  default_locale: vi
+  locales:
+    vi:
+      tts_voice: speaches-ai/piper-vi_VN-25hours_single-low
+      tts_speeches_voice: 25hours_single
+    en:
+      tts_voice: speaches-ai/piper-en_US-lessac-medium
+      tts_speeches_voice: lessac
+
+TTS:
+  CustomTTS:
+    type: custom
+    method: POST
+    url: "http://127.0.0.1:8881/v1/audio/speech"
+    default_voice: default
+    format: wav
+    output_dir: tmp/
+    params:
+      input: "{prompt_text}"
+      model: "{model}"
+      voice: "{voice}"
+      response_format: "wav"
+      speed: 1.0
+```
+
+`language_runtime` sets `{model}` per locale; `{voice}` is usually `default` for single-speaker Piper models.
+
+### 3. Restart server
+
+```bash
+./run.sh
+```
+
+### Optional: VieNeu (higher quality, GPU)
+
+For NVIDIA GPU hosts, VieNeu-TTS v2 Docker (`pnnbao/vieneu-tts`) gives better Vietnamese quality but needs CUDA. Not required for Mac CPU — use Piper above. See [VieNeu-TTS](https://github.com/pnnbao-ump/VieNeu-TTS).
 
 ## Digital human (browser)
 

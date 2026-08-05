@@ -5,6 +5,7 @@ import copy
 import wave
 import socket
 import asyncio
+import shutil
 import requests
 import subprocess
 import numpy as np
@@ -15,6 +16,51 @@ from pydub import AudioSegment
 from typing import Callable, Any
 
 TAG = __name__
+
+
+def _normalize_audio_segment(audio: AudioSegment, sample_rate: int) -> AudioSegment:
+    """Mono 16-bit PCM; use ffmpeg resampling when downsampling for clearer TTS on 16 kHz devices."""
+    audio = audio.set_channels(1).set_sample_width(2)
+    if audio.frame_rate == sample_rate:
+        return audio
+    if shutil.which("ffmpeg"):
+        in_path = out_path = None
+        try:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".in.wav", delete=False) as f_in:
+                in_path = f_in.name
+            out_path = in_path.replace(".in.wav", ".out.wav")
+            audio.export(in_path, format="wav")
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-nostdin",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    in_path,
+                    "-ar",
+                    str(sample_rate),
+                    "-ac",
+                    "1",
+                    "-sample_fmt",
+                    "s16",
+                    out_path,
+                ],
+                check=True,
+            )
+            return AudioSegment.from_file(
+                out_path, format="wav", parameters=["-nostdin"]
+            )
+        except Exception:
+            pass
+        finally:
+            for path in (in_path, out_path):
+                if path and os.path.exists(path):
+                    os.remove(path)
+    return audio.set_frame_rate(sample_rate)
 
 
 def get_local_ip():
@@ -234,12 +280,10 @@ def audio_to_data_stream(
     if file_type:
         file_type = file_type.lstrip(".")
     # 读取音频文件，-nostdin 参数：不要从标准输入读取数据，否则FFmpeg会阻塞
-    audio = AudioSegment.from_file(
-        audio_file_path, format=file_type, parameters=["-nostdin"]
+    audio = _normalize_audio_segment(
+        AudioSegment.from_file(audio_file_path, format=file_type, parameters=["-nostdin"]),
+        sample_rate,
     )
-
-    # 转换为单声道/指定采样率/16位小端编码（确保与编码器匹配）
-    audio = audio.set_channels(1).set_frame_rate(sample_rate).set_sample_width(2)
 
     # 获取原始PCM数据（16位小端）
     raw_data = audio.raw_data
@@ -274,12 +318,12 @@ async def audio_to_data(
         if file_type:
             file_type = file_type.lstrip(".")
         # 读取音频文件，-nostdin 参数：不要从标准输入读取数据，否则FFmpeg会阻塞
-        audio = AudioSegment.from_file(
-            audio_file_path, format=file_type, parameters=["-nostdin"]
+        audio = _normalize_audio_segment(
+            AudioSegment.from_file(
+                audio_file_path, format=file_type, parameters=["-nostdin"]
+            ),
+            16000,
         )
-
-        # 转换为单声道/16kHz采样率/16位小端编码（确保与编码器匹配）
-        audio = audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
 
         # 获取原始PCM数据（16位小端）
         raw_data = audio.raw_data
@@ -335,10 +379,12 @@ def audio_bytes_to_data_stream(
         return p3.decode_opus_from_bytes_stream(audio_bytes, callback)
     else:
         # 其他格式用pydub
-        audio = AudioSegment.from_file(
-            BytesIO(audio_bytes), format=file_type, parameters=["-nostdin"]
+        audio = _normalize_audio_segment(
+            AudioSegment.from_file(
+                BytesIO(audio_bytes), format=file_type, parameters=["-nostdin"]
+            ),
+            sample_rate,
         )
-        audio = audio.set_channels(1).set_frame_rate(sample_rate).set_sample_width(2)
         raw_data = audio.raw_data
         pcm_to_data_stream(raw_data, is_opus, callback, sample_rate, opus_encoder)
 

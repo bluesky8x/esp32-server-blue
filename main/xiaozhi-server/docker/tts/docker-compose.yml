@@ -1,0 +1,25 @@
+# Local Piper TTS for Blue stack (Speaches — OpenAI-compatible /v1/audio/speech)
+# CPU-only, works on Mac (Apple Silicon) and Linux.
+#
+# Start:  ../../run-tts.sh setup && ../../run-tts.sh up
+# Test:   ../../run-tts.sh test
+# Logs:   ../../run-tts.sh logs
+
+services:
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    container_name: blue-piper-tts
+    restart: unless-stopped
+    ports:
+      - "${TTS_HOST_PORT:-8881}:8000"
+    volumes:
+      - speaches-hf-cache:/home/ubuntu/.cache/huggingface/hub
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  speaches-hf-cache:

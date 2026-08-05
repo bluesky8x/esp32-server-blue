@@ -132,7 +132,9 @@ class TTSProviderBase(ABC):
         if steps and self.conn and hasattr(self.conn, "_dispatch_robot_move_steps"):
             sid = sentence_id or getattr(self, "current_sentence_id", None)
             self.conn._dispatch_robot_move_steps(sid, steps)
-        return textUtils.normalize_vietnamese_tts_text(cleaned)
+        if getattr(self.conn, "normalize_vietnamese_tts", True):
+            cleaned = textUtils.normalize_vietnamese_tts_text(cleaned)
+        return cleaned
 
     def to_tts_stream(self, text, opus_handler: Callable[[bytes], None] = None) -> None:
         # 保留原始文本用于显示/上报
