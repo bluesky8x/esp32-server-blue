@@ -1128,11 +1128,27 @@ class ConnectionHandler:
     def _prepare_llm_text_for_tts(
         self, sentence_id: str | None, text: str, *, trim_edges: bool = False
     ) -> str:
+        from core.utils.character_switch_codec import (
+            apply_char_switch_from_assistant_text,
+            strip_char_tags,
+        )
+        from core.utils.sleep_tag_codec import (
+            apply_sleep_tag_from_assistant_text,
+            strip_sleep_tag,
+        )
         from core.utils.robot_move_codec import split_robot_move_tags
 
         if not text:
             return ""
+        apply_char_switch_from_assistant_text(
+            self, text, label="prepare_llm_text_for_tts"
+        )
+        apply_sleep_tag_from_assistant_text(
+            self, text, label="prepare_llm_text_for_tts"
+        )
         cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
+        cleaned = strip_char_tags(cleaned, trim_edges=trim_edges)
+        cleaned = strip_sleep_tag(cleaned, trim_edges=trim_edges)
         self._dispatch_mv_from_assistant_text(
             sentence_id, text, label="prepare_llm_text_for_tts"
         )
@@ -1141,17 +1157,31 @@ class ConnectionHandler:
     def _enqueue_tts_stream_part(
         self, sentence_id: str | None, text: str, *, flush_hold: bool = False
     ) -> None:
-        """Stream-safe TTS enqueue: holds incomplete trailing mv:* tags."""
+        """Stream-safe TTS enqueue: holds incomplete trailing mv:* / char:* / sleep tags."""
+        from core.utils.character_switch_codec import (
+            apply_char_switch_from_assistant_text,
+            hold_incomplete_char_suffix,
+            strip_char_tags,
+        )
+        from core.utils.sleep_tag_codec import (
+            apply_sleep_tag_from_assistant_text,
+            hold_incomplete_sleep_suffix,
+            strip_sleep_tag,
+        )
         from core.utils.robot_move_codec import (
             finalize_stream_text_for_tts,
             prepare_stream_chunk_for_tts,
         )
 
         if flush_hold:
-            held = getattr(self, "_move_tag_stream_hold", "") or ""
+            held_mv = getattr(self, "_move_tag_stream_hold", "") or ""
+            held_char = getattr(self, "_char_tag_stream_hold", "") or ""
+            held_sleep = getattr(self, "_sleep_tag_stream_hold", "") or ""
             self._move_tag_stream_hold = ""
-            if held:
-                text = held + (text or "")
+            self._char_tag_stream_hold = ""
+            self._sleep_tag_stream_hold = ""
+            if held_mv or held_char or held_sleep:
+                text = held_mv + held_char + held_sleep + (text or "")
 
         if not text and not flush_hold:
             return
@@ -1159,21 +1189,27 @@ class ConnectionHandler:
         default_sec = self._robot_move_default_duration()
         max_sec = self._robot_move_max_duration()
 
-        if flush_hold and text:
+        raw_chunk = text or ""
+        work, char_hold = hold_incomplete_char_suffix(raw_chunk)
+        work, sleep_hold = hold_incomplete_sleep_suffix(work)
+        self._char_tag_stream_hold = char_hold
+        self._sleep_tag_stream_hold = sleep_hold
+
+        if flush_hold and work:
             cleaned, steps = finalize_stream_text_for_tts(
-                text,
+                work,
                 default_sec=default_sec,
                 max_sec=max_sec,
                 allow_inference=bool(getattr(self, "_user_requested_move", False)),
             )
-            hold = ""
+            mv_hold = ""
         else:
-            hold = getattr(self, "_move_tag_stream_hold", "") or ""
-            chunk = hold + text
-            cleaned, hold, steps = prepare_stream_chunk_for_tts(
+            hold_mv = getattr(self, "_move_tag_stream_hold", "") or ""
+            chunk = hold_mv + work
+            cleaned, mv_hold, steps = prepare_stream_chunk_for_tts(
                 chunk, default_sec=default_sec, max_sec=max_sec
             )
-            self._move_tag_stream_hold = hold
+            self._move_tag_stream_hold = mv_hold
 
         if steps:
             self._dispatch_robot_move_steps(sentence_id, steps)
@@ -1181,6 +1217,17 @@ class ConnectionHandler:
             self._dispatch_mv_from_assistant_text(
                 sentence_id, cleaned, label="tts_stream_final"
             )
+
+        if work:
+            apply_char_switch_from_assistant_text(
+                self, work, label="tts_stream"
+            )
+            apply_sleep_tag_from_assistant_text(
+                self, work, label="tts_stream"
+            )
+        cleaned = strip_char_tags(cleaned or "", trim_edges=False)
+        cleaned = strip_sleep_tag(cleaned or "", trim_edges=False)
+
         if cleaned:
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
@@ -1302,8 +1349,52 @@ class ConnectionHandler:
             content="已直接回复", is_temporary=True,
         ))
 
-        # 示例2：真实工具调用（handle_exit_intent）
-        if "handle_exit_intent" in tool_names:
+        # 示例1c：sleep tag（buồn ngủ → goodbye + sleep）
+        da_sleep_id = "fewshot_da_sleep_001"
+        self.dialogue.put(Message(role="user", content="Thôi mình buồn ngủ quá", is_temporary=True))
+        self.dialogue.put(Message(
+            role="assistant",
+            tool_calls=[{
+                "id": da_sleep_id,
+                "function": {
+                    "arguments": '{"response": "Ngủ ngon nha, mai chơi tiếp sleep"}',
+                    "name": "direct_answer",
+                },
+                "type": "function", "index": 0,
+            }],
+            is_temporary=True,
+        ))
+        self.dialogue.put(Message(
+            role="tool", tool_call_id=da_sleep_id,
+            content="已直接回复", is_temporary=True,
+        ))
+
+        # 示例2：真实工具调用（go_to_sleep / handle_exit_intent）
+        if "go_to_sleep" in tool_names:
+            tc_id = "fewshot_sleep_001"
+            self.dialogue.put(Message(role="user", content="ngủ đi nhé", is_temporary=True))
+            self.dialogue.put(Message(
+                role="assistant",
+                tool_calls=[{
+                    "id": tc_id,
+                    "function": {
+                        "arguments": '{"say_goodbye": "Ngủ ngon nha! Hẹn gặp lại bạn sau 😴"}',
+                        "name": "go_to_sleep",
+                    },
+                    "type": "function", "index": 0,
+                }],
+                is_temporary=True,
+            ))
+            self.dialogue.put(Message(
+                role="tool", tool_call_id=tc_id,
+                content="sleep_intent_handled", is_temporary=True,
+            ))
+            self.dialogue.put(Message(
+                role="assistant",
+                content="Ngủ ngon nha! Hẹn gặp lại bạn sau 😴",
+                is_temporary=True,
+            ))
+        elif "handle_exit_intent" in tool_names:
             tc_id = "fewshot_exit_001"
             self.dialogue.put(Message(role="user", content="拜拜", is_temporary=True))
             self.dialogue.put(Message(
@@ -1683,6 +1774,8 @@ class ConnectionHandler:
             self.sentence_id = current_sentence_id  # 更新共享属性
             self._executed_robot_moves = set()
             self._move_tag_stream_hold = ""
+            self._char_tag_stream_hold = ""
+            self._sleep_tag_stream_hold = ""
             self._robot_move_sequence_queue = []
             self._robot_move_in_flight = False
             self._robot_move_pump_scheduled = False

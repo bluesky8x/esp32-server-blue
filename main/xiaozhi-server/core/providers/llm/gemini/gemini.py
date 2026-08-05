@@ -82,12 +82,32 @@ def _is_daily_quota_exhausted(exc: BaseException) -> bool:
     return "PerDay" in msg or "PerDayPerProjectPerModel" in msg
 
 
+def _is_rpm_quota_exhausted(exc: BaseException) -> bool:
+    msg = str(exc)
+    return (
+        "PerMinute" in msg
+        or "requests_per_minute" in msg
+        or "RPM" in msg
+    )
+
+
 def _is_retryable_gemini_quota(exc: BaseException) -> bool:
     if not isinstance(exc, gcp_exceptions.ResourceExhausted):
         return False
     if _is_daily_quota_exhausted(exc):
         return False
     return True
+
+
+# Google AI Studio free-tier flash models (2026) — higher RPD first for fallbacks.
+DEFAULT_GEMINI_FREE_FALLBACKS: tuple[str, ...] = (
+    "gemini-3.5-flash-lite",   # 500 RPD, 15 RPM
+    "gemini-3.1-flash-lite",   # 500 RPD, 15 RPM
+    "gemini-2.5-flash-lite",   # 20 RPD, 10 RPM
+    "gemini-2.5-flash",        # 20 RPD, 5 RPM
+    "gemini-3.5-flash",        # 20 RPD, 5 RPM
+    "gemini-3.6-flash",        # 20 RPD, 5 RPM (alias: gemini-flash-latest)
+)
 
 
 def _is_retryable_gemini_timeout(exc: BaseException) -> bool:
@@ -100,15 +120,21 @@ def _is_retryable_gemini_timeout(exc: BaseException) -> bool:
 class LLMProvider(LLMProviderBase):
     def __init__(self, cfg: Dict[str, Any]):
         self.model_name = cfg.get("model_name", "gemini-flash-latest")
-        raw_fallbacks = cfg.get("fallback_models") or [
-            "gemini-3.5-flash-lite",
-            "gemini-3.5-flash",
-            "gemini-3.1-flash-lite",
-        ]
+        auto_fallback = cfg.get("auto_model_fallback", True)
+        self.auto_model_fallback = auto_fallback is not False
+
+        configured_fallbacks = cfg.get("fallback_models")
+        if configured_fallbacks is None and self.auto_model_fallback:
+            raw_fallbacks = list(DEFAULT_GEMINI_FREE_FALLBACKS)
+        else:
+            raw_fallbacks = configured_fallbacks or []
         self.fallback_models = [
-            m for m in raw_fallbacks
+            m.strip()
+            for m in raw_fallbacks
             if isinstance(m, str) and m.strip() and m.strip() != self.model_name
         ]
+        # Models that hit daily (RPD) quota — skipped until server restart.
+        self._daily_exhausted_models: set[str] = set()
         self.api_key = cfg["api_key"]
         http_proxy = cfg.get("http_proxy")
         https_proxy = cfg.get("https_proxy")
@@ -181,7 +207,29 @@ class LLMProvider(LLMProviderBase):
 
         log.bind(tag=TAG).info(
             f"Gemini LLM: model={self.model_name} "
-            f"(v1beta generateContent), max_output_tokens={max_output_tokens}"
+            f"(v1beta generateContent), max_output_tokens={max_output_tokens}, "
+            f"auto_fallback={self.auto_model_fallback}, "
+            f"fallbacks={self.fallback_models or 'none'}"
+        )
+
+    def _models_to_try(self) -> list[str]:
+        """Primary model first, then fallbacks; skip models that exhausted daily quota."""
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for name in (self.model_name, *self.fallback_models):
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            if name in self._daily_exhausted_models:
+                continue
+            ordered.append(name)
+        return ordered
+
+    def _mark_daily_exhausted(self, model_name: str, exc: BaseException) -> None:
+        self._daily_exhausted_models.add(model_name)
+        log.bind(tag=TAG).warning(
+            f"Gemini daily quota exceeded for {model_name} — skipping until restart. "
+            f"({exc})"
         )
 
     @staticmethod
@@ -312,7 +360,13 @@ class LLMProvider(LLMProviderBase):
         self._inject_locale_hint(contents, active_locale)
 
         last_exc: BaseException | None = None
-        models_to_try = [self.model_name, *self.fallback_models]
+        models_to_try = self._models_to_try()
+        if not models_to_try:
+            raise RuntimeError(
+                "All configured Gemini models exhausted daily quota. "
+                "Wait for quota reset or add billing in Google AI Studio."
+            )
+
         for model_name in models_to_try:
             attempt_model = (
                 genai.GenerativeModel(
@@ -322,50 +376,76 @@ class LLMProvider(LLMProviderBase):
                 if system_instruction
                 else genai.GenerativeModel(model_name)
             )
+            model_failed = False
             for attempt in range(max(self.quota_retries, self.timeout_retries) + 1):
                 try:
                     if model_name != self.model_name:
                         log.bind(tag=TAG).warning(
-                            f"Gemini falling back to model={model_name}"
+                            f"Gemini auto-switch → model={model_name}"
                         )
                     yield from self._generate_stream(attempt_model, contents, tools)
                     if model_name != self.model_name:
                         self.model_name = model_name
                         self.model = genai.GenerativeModel(model_name)
+                        log.bind(tag=TAG).info(
+                            f"Gemini active model is now {model_name}"
+                        )
                     return
                 except gcp_exceptions.NotFound as exc:
                     last_exc = exc
                     log.bind(tag=TAG).warning(
                         f"Gemini model unavailable: {model_name} ({exc})"
                     )
+                    model_failed = True
                     break
                 except gcp_exceptions.DeadlineExceeded as exc:
                     last_exc = exc
                     if attempt >= self.timeout_retries:
-                        raise
+                        log.bind(tag=TAG).warning(
+                            f"Gemini timeout on {model_name}, trying next model"
+                        )
+                        model_failed = True
+                        break
                     delay = 2 ** attempt
                     log.bind(tag=TAG).warning(
                         f"Gemini timeout (504), retry {attempt + 1}/"
-                        f"{self.timeout_retries} in {delay:.1f}s"
+                        f"{self.timeout_retries} on {model_name} in {delay:.1f}s"
                     )
                     time.sleep(delay)
                 except gcp_exceptions.ResourceExhausted as exc:
                     last_exc = exc
                     if _is_daily_quota_exhausted(exc):
+                        if self.auto_model_fallback:
+                            self._mark_daily_exhausted(model_name, exc)
+                            model_failed = True
+                            break
                         log.bind(tag=TAG).error(
                             f"Gemini daily quota exceeded for {model_name}. "
-                            f"Try another model in GeminiLLM.fallback_models, "
-                            f"wait for quota reset, or enable billing in Google AI Studio."
+                            f"Enable auto_model_fallback or switch model_name."
                         )
                         raise
-                    if attempt >= self.quota_retries or not _is_retryable_gemini_quota(exc):
-                        raise
-                    delay = _parse_retry_delay_seconds(exc) or (2 ** attempt)
-                    log.bind(tag=TAG).warning(
-                        f"Gemini rate-limited (429), retry {attempt + 1}/"
-                        f"{self.quota_retries} in {delay:.1f}s"
-                    )
-                    time.sleep(delay)
+                    # RPM / short-window quota — retry same model, then fallback.
+                    if (
+                        attempt < self.quota_retries
+                        and _is_retryable_gemini_quota(exc)
+                    ):
+                        delay = _parse_retry_delay_seconds(exc) or (2 ** attempt)
+                        kind = "RPM" if _is_rpm_quota_exhausted(exc) else "rate"
+                        log.bind(tag=TAG).warning(
+                            f"Gemini {kind}-limited on {model_name}, retry "
+                            f"{attempt + 1}/{self.quota_retries} in {delay:.1f}s"
+                        )
+                        time.sleep(delay)
+                        continue
+                    if self.auto_model_fallback:
+                        kind = "RPM" if _is_rpm_quota_exhausted(exc) else "quota"
+                        log.bind(tag=TAG).warning(
+                            f"Gemini {kind} exhausted on {model_name}, "
+                            f"trying next free model"
+                        )
+                        model_failed = True
+                        break
+                    raise
                 except Exception as exc:
                     if (
                         _is_retryable_gemini_timeout(exc)
@@ -374,17 +454,22 @@ class LLMProvider(LLMProviderBase):
                         last_exc = exc
                         delay = 2 ** attempt
                         log.bind(tag=TAG).warning(
-                            f"Gemini timeout ({exc}), retry {attempt + 1}/"
-                            f"{self.timeout_retries} in {delay:.1f}s"
+                            f"Gemini timeout ({exc}) on {model_name}, retry "
+                            f"{attempt + 1}/{self.timeout_retries} in {delay:.1f}s"
                         )
                         time.sleep(delay)
                         continue
                     raise
 
+            if model_failed:
+                continue
+
         if last_exc is not None:
+            exhausted = sorted(self._daily_exhausted_models)
             log.bind(tag=TAG).error(
                 f"All Gemini models failed. Tried: {models_to_try}. "
-                f"Set GeminiLLM.model_name to one available in Google AI Studio."
+                f"Daily exhausted: {exhausted or 'none'}. "
+                f"Adjust GeminiLLM.model_name / fallback_models in config."
             )
             raise last_exc
 

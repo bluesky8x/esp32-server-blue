@@ -85,6 +85,17 @@ exit_commands:
   - "退出"
   - "关闭"
 
+# End conversation → sleep mode via LLM `sleep` tag at end of reply (like mv:*).
+# Set enable: true only for legacy regex STT fallback (not recommended).
+sleep_intent:
+  enable: false
+  # Optional extra exact phrases (lowercase match after normalize)
+  exact_phrases:
+    - "tạm biệt nhé"
+    - "ngủ đi nhé"
+    - "bye kira"
+    - "good night kira"
+
 # Blue V1 — Kira character + motor/locale defaults
 character: kira
 
@@ -140,6 +151,13 @@ character_wake_map:
     - lili ơi
     - coka
     - coka ơi
+
+# Firmware default wake text (listen-detect) → mapped to `character` (kira)
+legacy_wakeup_phrases:
+  - 嘿，你好呀
+  - 嘿你好呀
+  - 你好小智
+  - 你好小志
 # MCP接入点地址，地址格式为：ws://你的mcp接入点ip或者域名:端口号/mcp/?token=你的token
 # 详细教程 https://github.com/xinnan-tech/xiaozhi-esp32-server/blob/main/docs/mcp-endpoint-integration.md
 mcp_endpoint: 你的接入点 websocket地址
@@ -685,13 +703,19 @@ LLM:
     type: gemini
     # Google AI Gemini — v1beta generateContent
     # API key: https://aistudio.google.com/apikey
-    # New accounts: 2.5-flash* returns 404; gemini-flash-latest → 3.6-flash (~20 req/day free).
+    # Free tier (approx): 3.5/3.1-flash-lite 500 RPD; 2.5/3.5/3.6-flash ~20 RPD.
     api_key: 你的gemini web key
     model_name: gemini-3.5-flash-lite
-    # Optional fallbacks if model_name is unavailable (Gemini provider only)
+    # Auto-switch to another free model on 429 RPM or daily (RPD) quota (default: true).
+    auto_model_fallback: true
+    # Fallback order when primary is rate-limited or unavailable.
+    # Omit fallback_models to use the built-in free-tier list below.
     fallback_models:
-      - gemini-3.5-flash
       - gemini-3.1-flash-lite
+      - gemini-2.5-flash-lite
+      - gemini-2.5-flash
+      - gemini-3.5-flash
+      - gemini-3.6-flash
     temperature: 0.7
     max_tokens: 120
     timeout: 120

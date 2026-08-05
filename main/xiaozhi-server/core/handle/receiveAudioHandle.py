@@ -109,6 +109,21 @@ async def startToChat(conn: "ConnectionHandler", text):
         # 如果意图已被处理，不再进行聊天
         return
 
+    from core.utils.language_runtime import is_unintelligible_asr, garbage_asr_response
+
+    if is_unintelligible_asr(actual_text):
+        conn.logger.bind(tag=TAG).info(
+            f"Skipping chat — unintelligible ASR: {actual_text!r} "
+            f"[locale={getattr(conn, 'active_locale', 'vi')}]"
+        )
+        await send_stt_message(conn, actual_text)
+        conn.client_abort = False
+        conn.sentence_id = str(uuid.uuid4().hex)
+        from core.handle.intentHandler import speak_txt
+
+        speak_txt(conn, garbage_asr_response(conn))
+        return
+
     if not is_character_wake:
         chat_text = await handle_character_wake(conn, actual_text)
         if chat_text is None:

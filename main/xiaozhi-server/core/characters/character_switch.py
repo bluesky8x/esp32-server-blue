@@ -14,7 +14,6 @@ from core.characters.character_registry import (
     SUPPORTED_CHARACTERS,
     get_display_name,
     get_operational_prompt,
-    get_tts_voice,
     resolve_character_id,
 )
 from core.utils.util import remove_punctuation_and_length
@@ -25,6 +24,8 @@ logger = setup_logging()
 
 def get_character_wake_map(config: dict[str, Any]) -> dict[str, list[str]]:
     """Map character id → wake phrases (lowercase)."""
+    from core.utils.wake_greeting import legacy_wakeup_phrases
+
     raw = config.get("character_wake_map")
     if isinstance(raw, dict) and raw:
         out: dict[str, list[str]] = {}
@@ -36,6 +37,14 @@ def get_character_wake_map(config: dict[str, Any]) -> dict[str, list[str]]:
             normalized = [str(p).lower().strip() for p in items if str(p).strip()]
             out.setdefault(key, []).extend(normalized)
         if out:
+            default_char = (
+                resolve_character_id(str(config.get("character") or "kira")) or "kira"
+            )
+            legacy = [p.lower().strip() for p in legacy_wakeup_phrases(config)]
+            if default_char in out and legacy:
+                out[default_char] = list(
+                    dict.fromkeys(out[default_char] + legacy)
+                )
             for key in out:
                 out[key] = list(dict.fromkeys(out[key]))
             return out
@@ -43,8 +52,10 @@ def get_character_wake_map(config: dict[str, Any]) -> dict[str, list[str]]:
     default = resolve_character_id(str(config.get("character") or "kira")) or "kira"
     words = config.get("wakeup_words") or []
     phrases = [str(w).lower().strip() for w in words if str(w).strip()]
+    legacy = [p.lower().strip() for p in legacy_wakeup_phrases(config)]
+    phrases = list(dict.fromkeys(phrases + legacy))
     if not phrases and default in SUPPORTED_CHARACTERS:
-        phrases = [default, f"hey {default}", f"{default} ơi"]
+        phrases = [default, f"hey {default}", f"{default} ơi"] + legacy
     return {default: phrases} if phrases else {}
 
 
@@ -113,16 +124,17 @@ def apply_active_character(conn: "ConnectionHandler", character_id: str) -> bool
     conn.config["prompt"] = get_operational_prompt(character_id)
     conn._character_switch_until = time.time() + 2.0
 
-    voice = get_tts_voice(
-        character_id, conn.config, getattr(conn, "active_locale", "vi")
-    )
-    if voice and getattr(conn, "tts", None) and hasattr(conn.tts, "voice"):
-        conn.tts.voice = voice
+    from core.utils.language_runtime import apply_locale_to_connection, default_locale
+
+    locale = getattr(conn, "active_locale", None) or default_locale(conn.config)
+    apply_locale_to_connection(conn, locale, reason="character_switch")
 
     if hasattr(conn, "prompt_manager") and conn.prompt_manager:
         conn._refresh_character_memory_prompt("")
+
     logger.bind(tag=TAG).info(
-        f"Character switched → {get_display_name(character_id)} (device={conn.device_id})"
+        f"Character switched → {get_display_name(character_id)} "
+        f"(device={conn.device_id}, locale={locale})"
     )
     return True
 
@@ -144,17 +156,12 @@ async def handle_character_wake(conn: "ConnectionHandler", text: str) -> str | N
 
     if wake_only:
         from core.handle.sendAudioHandle import send_stt_message
+        from core.utils.wake_greeting import speak_wake_greeting
 
         display = (text or "").strip() or name
         await send_stt_message(conn, display)
         if switched or conn.config.get("enable_greeting", True):
-            greet_prompt = (
-                f"The user just called your name ({display}). "
-                f"Reply with ONE short friendly greeting in character as {name}. "
-                f"Same language as the user would use (Vietnamese or English)."
-            )
-            conn.client_abort = False
-            conn.executor.submit(conn.chat, greet_prompt)
+            conn.executor.submit(speak_wake_greeting, conn, char_id, text or display)
         return None
 
     return remainder if remainder else text

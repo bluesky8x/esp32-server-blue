@@ -59,7 +59,7 @@ class ServerPluginExecutor(ToolExecutor):
         tools = {}
 
         # 获取必要的函数
-        necessary_functions = ["handle_exit_intent", "get_lunar"]
+        necessary_functions = ["handle_exit_intent", "go_to_sleep", "get_lunar"]
 
         # 获取配置中的函数
         config_functions = self.config["Intent"][

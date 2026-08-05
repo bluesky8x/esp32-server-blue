@@ -37,6 +37,9 @@ def handle_exit_intent(conn: "ConnectionHandler", say_goodbye: str | None = None
             say_goodbye = "再见，祝您生活愉快！"
         if not conn.close_after_chat:
             conn.close_after_chat = True
+        from core.utils.device_sleep import schedule_device_sleep
+
+        schedule_device_sleep(conn)
         logger.bind(tag=TAG).info(f"退出意图已处理:{say_goodbye}")
         return ActionResponse(
             action=Action.RESPONSE, result="退出意图已处理", response=say_goodbye
