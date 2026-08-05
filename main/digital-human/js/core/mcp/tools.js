@@ -1,4 +1,9 @@
 import { log } from '../../utils/logger.js?v=0205';
+import {
+    parseMotorDurationMs,
+    resolveMoveActionFromWheel,
+    showMotorSimulation,
+} from './motor-sim.js?v=0205';
 
 // ==========================================
 // MCP 工具管理逻辑
@@ -50,6 +55,7 @@ export async function initMcpTools() {
     }
     renderMcpTools();
     setupMcpEventListeners();
+    window.showMotorSimulation = showMotorSimulation;
 }
 
 /**
@@ -484,6 +490,18 @@ function normalizeToolLookupName(toolName) {
     return (toolName || '').replace(/\./g, '_');
 }
 
+function normalizeToolArgs(toolArgs) {
+    if (!toolArgs) return {};
+    if (typeof toolArgs === 'string') {
+        try {
+            return JSON.parse(toolArgs);
+        } catch (_e) {
+            return {};
+        }
+    }
+    return toolArgs;
+}
+
 function getMotorSimulatorAction(toolName) {
     const key = normalizeToolLookupName(toolName);
     const actions = {
@@ -502,22 +520,17 @@ function getMotorSimulatorAction(toolName) {
 }
 
 function runMotorSimulator(toolName, toolArgs = {}) {
+    const args = normalizeToolArgs(toolArgs);
     const key = normalizeToolLookupName(toolName);
-    if (key === 'self_motor_move' && toolArgs) {
-        const left = toolArgs.left ?? 0;
-        const right = toolArgs.right ?? 0;
-        const durationMs = toolArgs.duration_ms ?? 5000;
-        let action = 'move';
-        if (left > 0 && right > 0) action = 'forward';
-        else if (left < 0 && right < 0) action = 'backward';
-        else if (left < 0 && right > 0) action = 'turn_left';
-        else if (left > 0 && right < 0) action = 'turn_right';
+
+    if (key === 'self_motor_move') {
+        const left = args.left ?? 0;
+        const right = args.right ?? 0;
+        const durationMs = parseMotorDurationMs(args);
+        const action = resolveMoveActionFromWheel(left, right);
         const sec = Math.round(durationMs / 1000);
         const label = `🤖 ${action} ${sec}s (simulator)`;
-        log(`[motor sim] ${label}`, 'success');
-        if (typeof window.showMotorSimulation === 'function') {
-            window.showMotorSimulation(action, label);
-        }
+        showMotorSimulation(action, label, durationMs);
         return {
             success: true,
             action,
@@ -526,23 +539,40 @@ function runMotorSimulator(toolName, toolArgs = {}) {
             message: label,
         };
     }
+
     const action = getMotorSimulatorAction(toolName);
     if (!action) {
         return null;
     }
-    const labels = {
-        stop: '🛑 Dừng motor (simulator)',
-        forward: '⬆️ Tiến (simulator)',
-        backward: '⬇️ Lùi (simulator)',
-        turn_left: '⬅️ Quay trái (simulator)',
-        turn_right: '➡️ Quay phải (simulator)',
-    };
-    const label = labels[action] || action;
-    log(`[motor sim] ${label}`, 'success');
-    if (typeof window.showMotorSimulation === 'function') {
-        window.showMotorSimulation(action, label);
+
+    if (action === 'stop') {
+        showMotorSimulation('stop', '🛑 Dừng motor (simulator)', 0);
+        return {
+            success: true,
+            action: 'stop',
+            duration_ms: 0,
+            simulated: true,
+            message: '🛑 Dừng motor (simulator)',
+        };
     }
-    return { success: true, action, simulated: true, message: label };
+
+    const durationMs = parseMotorDurationMs(args);
+    const sec = Math.round(durationMs / 1000);
+    const labels = {
+        forward: `⬆️ Tiến ${sec}s (simulator)`,
+        backward: `⬇️ Lùi ${sec}s (simulator)`,
+        turn_left: `⬅️ Quay trái ${sec}s (simulator)`,
+        turn_right: `➡️ Quay phải ${sec}s (simulator)`,
+    };
+    const label = labels[action] || `${action} ${sec}s (simulator)`;
+    showMotorSimulation(action, label, durationMs);
+    return {
+        success: true,
+        action,
+        duration_ms: durationMs,
+        simulated: true,
+        message: label,
+    };
 }
 
 export async function executeMcpTool(toolName, toolArgs) {

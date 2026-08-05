@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-MAX_ROBOT_MOVE_SEQUENCE = 3
+MAX_ROBOT_MOVE_SEQUENCE = 5
 DEFAULT_ROBOT_MOVE_DURATION_SEC = 5
 MAX_ROBOT_MOVE_DURATION_SEC = 30
 
@@ -343,15 +343,24 @@ def build_mcp_call(
 
     speeds = MOVE_WHEEL_SPEEDS.get(code)
     move_tool = resolve_motor_move_tool(available)
+    duration_ms = (
+        step.duration_sec * 1000
+        if step.duration_sec > 0
+        else DEFAULT_ROBOT_MOVE_DURATION_SEC * 1000
+    )
+
     if move_tool and speeds is not None and step.duration_sec > 0:
         left, right = speeds
         return move_tool, {
             "left": left,
             "right": right,
-            "duration_ms": step.duration_sec * 1000,
+            "duration_ms": duration_ms,
         }
 
-    return resolve_mcp_tool(code, available), {}
+    tool = resolve_mcp_tool(code, available)
+    if tool and step.duration_sec > 0:
+        return tool, {"duration_ms": duration_ms}
+    return tool, {}
 
 
 def format_move_step(step: RobotMoveStep) -> str:

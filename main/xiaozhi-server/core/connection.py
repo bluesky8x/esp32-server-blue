@@ -739,7 +739,7 @@ class ConnectionHandler:
         return float(self.config.get("robot_move_step_delay_seconds", 5))
 
     def _robot_move_max_sequence(self) -> int:
-        return int(self.config.get("robot_move_max_sequence", 3))
+        return int(self.config.get("robot_move_max_sequence", 5))
 
     def _robot_move_default_duration(self) -> int:
         return int(self.config.get("robot_move_default_duration_seconds", 5))
@@ -758,6 +758,79 @@ class ConnectionHandler:
         self._pending_robot_moves.clear()
         self._robot_move_pump_scheduled = False
         self._robot_move_in_flight = False
+
+    def emergency_stop_robot_moves(
+        self, *, label: str = "", dispatch_stop: bool = True
+    ) -> int:
+        """Failsafe: drop all queued/pending mv steps and send motor stop now."""
+        queued = len(getattr(self, "_robot_move_sequence_queue", None) or [])
+        pending = len(getattr(self, "_pending_robot_moves", None) or [])
+        cleared = queued + pending
+
+        handle = getattr(self, "_robot_move_pump_handle", None)
+        if handle is not None:
+            try:
+                handle.cancel()
+            except Exception:
+                pass
+        self._robot_move_pump_handle = None
+        self._robot_move_sequence_queue.clear()
+        self._pending_robot_moves.clear()
+        self._robot_move_pump_scheduled = False
+        self._robot_move_cooldown_until = 0.0
+
+        if dispatch_stop:
+            self._dispatch_motor_stop_immediate(label=label)
+
+        if cleared or dispatch_stop:
+            self.logger.bind(tag=TAG).info(
+                f"[mv] emergency stop — cleared {cleared} queued/pending "
+                f"(in_flight={getattr(self, '_robot_move_in_flight', False)}, "
+                f"from={label or 'unknown'})"
+            )
+        return cleared
+
+    def _dispatch_motor_stop_immediate(self, *, label: str = "") -> None:
+        """Send self.motor.stop immediately — bypasses queue and dedupe."""
+        from core.utils.robot_move_codec import RobotMoveStep, build_mcp_call
+
+        if not getattr(self, "func_handler", None) or not getattr(self, "loop", None):
+            self.logger.bind(tag=TAG).warning(
+                "[mv] emergency stop — func_handler/loop missing"
+            )
+            return
+
+        step = RobotMoveStep(code="s", duration_sec=0)
+        tool_name, tool_args = build_mcp_call(
+            step, self._robot_move_available_tools()
+        )
+        if not tool_name:
+            self.logger.bind(tag=TAG).warning(
+                "[mv] emergency stop — no motor stop MCP tool"
+            )
+            return
+
+        args_json = json.dumps(tool_args, ensure_ascii=False)
+        self.logger.bind(tag=TAG).info(
+            f"[mv] emergency stop → {tool_name} args={args_json} "
+            f"(from={label or 'unknown'})"
+        )
+
+        def _on_stop_done(fut):
+            try:
+                fut.result()
+            except Exception as exc:
+                self.logger.bind(tag=TAG).error(
+                    f"[mv] emergency stop MCP failed: {exc}"
+                )
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.func_handler.handle_llm_function_call(
+                self, {"name": tool_name, "arguments": args_json}
+            ),
+            self.loop,
+        )
+        future.add_done_callback(_on_stop_done)
 
     def _robot_move_cooldown_remaining(self) -> float:
         return max(0.0, getattr(self, "_robot_move_cooldown_until", 0.0) - time.monotonic())
@@ -1128,6 +1201,10 @@ class ConnectionHandler:
     def _prepare_llm_text_for_tts(
         self, sentence_id: str | None, text: str, *, trim_edges: bool = False
     ) -> str:
+        from core.utils.memory_tag_codec import (
+            apply_mem_tags_from_assistant_text,
+            strip_mem_tags,
+        )
         from core.utils.character_switch_codec import (
             apply_char_switch_from_assistant_text,
             strip_char_tags,
@@ -1140,6 +1217,9 @@ class ConnectionHandler:
 
         if not text:
             return ""
+        apply_mem_tags_from_assistant_text(
+            self, text, label="prepare_llm_text_for_tts"
+        )
         apply_char_switch_from_assistant_text(
             self, text, label="prepare_llm_text_for_tts"
         )
@@ -1147,6 +1227,7 @@ class ConnectionHandler:
             self, text, label="prepare_llm_text_for_tts"
         )
         cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
+        cleaned = strip_mem_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_char_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_sleep_tag(cleaned, trim_edges=trim_edges)
         self._dispatch_mv_from_assistant_text(
@@ -1157,7 +1238,12 @@ class ConnectionHandler:
     def _enqueue_tts_stream_part(
         self, sentence_id: str | None, text: str, *, flush_hold: bool = False
     ) -> None:
-        """Stream-safe TTS enqueue: holds incomplete trailing mv:* / char:* / sleep tags."""
+        """Stream-safe TTS enqueue: holds incomplete trailing mv:* / char:* / mem:* / sleep tags."""
+        from core.utils.memory_tag_codec import (
+            apply_mem_tags_from_assistant_text,
+            hold_incomplete_mem_suffix,
+            strip_mem_tags,
+        )
         from core.utils.character_switch_codec import (
             apply_char_switch_from_assistant_text,
             hold_incomplete_char_suffix,
@@ -1176,12 +1262,14 @@ class ConnectionHandler:
         if flush_hold:
             held_mv = getattr(self, "_move_tag_stream_hold", "") or ""
             held_char = getattr(self, "_char_tag_stream_hold", "") or ""
+            held_mem = getattr(self, "_mem_tag_stream_hold", "") or ""
             held_sleep = getattr(self, "_sleep_tag_stream_hold", "") or ""
             self._move_tag_stream_hold = ""
             self._char_tag_stream_hold = ""
+            self._mem_tag_stream_hold = ""
             self._sleep_tag_stream_hold = ""
-            if held_mv or held_char or held_sleep:
-                text = held_mv + held_char + held_sleep + (text or "")
+            if held_mv or held_char or held_mem or held_sleep:
+                text = held_mv + held_char + held_mem + held_sleep + (text or "")
 
         if not text and not flush_hold:
             return
@@ -1191,8 +1279,10 @@ class ConnectionHandler:
 
         raw_chunk = text or ""
         work, char_hold = hold_incomplete_char_suffix(raw_chunk)
+        work, mem_hold = hold_incomplete_mem_suffix(work)
         work, sleep_hold = hold_incomplete_sleep_suffix(work)
         self._char_tag_stream_hold = char_hold
+        self._mem_tag_stream_hold = mem_hold
         self._sleep_tag_stream_hold = sleep_hold
 
         if flush_hold and work:
@@ -1219,12 +1309,17 @@ class ConnectionHandler:
             )
 
         if work:
+            if flush_hold:
+                apply_mem_tags_from_assistant_text(
+                    self, work, label="tts_stream"
+                )
             apply_char_switch_from_assistant_text(
                 self, work, label="tts_stream"
             )
             apply_sleep_tag_from_assistant_text(
                 self, work, label="tts_stream"
             )
+        cleaned = strip_mem_tags(cleaned or "", trim_edges=False)
         cleaned = strip_char_tags(cleaned or "", trim_edges=False)
         cleaned = strip_sleep_tag(cleaned or "", trim_edges=False)
 
@@ -1366,6 +1461,26 @@ class ConnectionHandler:
         ))
         self.dialogue.put(Message(
             role="tool", tool_call_id=da_sleep_id,
+            content="已直接回复", is_temporary=True,
+        ))
+
+        # 示例1d：mem tag（user shares like → save long-term memory）
+        da_mem_id = "fewshot_da_mem_001"
+        self.dialogue.put(Message(role="user", content="Mình thích cà phê lắm", is_temporary=True))
+        self.dialogue.put(Message(
+            role="assistant",
+            tool_calls=[{
+                "id": da_mem_id,
+                "function": {
+                    "arguments": '{"response": "Okie, mình nhớ bạn thích cà phê nha mem:like:coffee"}',
+                    "name": "direct_answer",
+                },
+                "type": "function", "index": 0,
+            }],
+            is_temporary=True,
+        ))
+        self.dialogue.put(Message(
+            role="tool", tool_call_id=da_mem_id,
             content="已直接回复", is_temporary=True,
         ))
 
@@ -1713,6 +1828,10 @@ class ConnectionHandler:
 
         # func_handler 在 _initialize_components 中通过 _ensure_func_handler 统一创建
 
+    def _character_memory_auto_extract(self) -> bool:
+        cfg = (self.config or {}).get("character_memory") or {}
+        return bool(cfg.get("auto_extract", False))
+
     def _refresh_character_memory_prompt(self, user_text: str = "") -> None:
         from core.characters.character_registry import (
             get_active_character,
@@ -1723,7 +1842,11 @@ class ConnectionHandler:
         character = get_active_character(self)
         if not character:
             return
-        get_store(character).prepare_turn(self.device_id or "default", user_text or "")
+        get_store(character).prepare_turn(
+            self.device_id or "default",
+            user_text or "",
+            auto_extract=self._character_memory_auto_extract(),
+        )
         enhanced = self.prompt_manager.refresh_device_prompt(
             get_operational_prompt(character),
             self.device_id,
@@ -1775,6 +1898,7 @@ class ConnectionHandler:
             self._executed_robot_moves = set()
             self._move_tag_stream_hold = ""
             self._char_tag_stream_hold = ""
+            self._mem_tag_stream_hold = ""
             self._sleep_tag_stream_hold = ""
             self._robot_move_sequence_queue = []
             self._robot_move_in_flight = False
@@ -2152,6 +2276,7 @@ class ConnectionHandler:
                     query,
                     assistant,
                     rude=rude,
+                    auto_extract=self._character_memory_auto_extract(),
                 )
 
             self._enqueue_tts_stream_part(

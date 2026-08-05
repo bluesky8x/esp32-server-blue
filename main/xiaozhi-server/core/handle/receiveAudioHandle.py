@@ -76,6 +76,24 @@ async def startToChat(conn: "ConnectionHandler", text):
         await check_bind_device(conn)
         return
 
+    from core.utils.robot_emergency_stop import (
+        emergency_stop_enabled,
+        pick_emergency_stop_ack,
+        user_requested_emergency_robot_stop,
+    )
+
+    if emergency_stop_enabled(conn) and user_requested_emergency_robot_stop(
+        actual_text
+    ):
+        conn.emergency_stop_robot_moves(label="user_emergency_stop")
+        await send_stt_message(conn, actual_text)
+        conn.client_abort = False
+        conn.sentence_id = str(uuid.uuid4().hex)
+        from core.handle.intentHandler import speak_txt
+
+        speak_txt(conn, pick_emergency_stop_ack(conn))
+        return
+
     # 如果当日的输出字数大于限定的字数
     if conn.max_output_size > 0:
         if check_device_output_limit(

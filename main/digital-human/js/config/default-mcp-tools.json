@@ -91,31 +91,70 @@
         "name": "self.motor.stop",
         "description": "Stop all motors. Use for: dừng, dừng lại, stop.",
         "inputSchema": { "type": "object", "properties": {} },
-        "mockResponse": { "success": true, "action": "stop" }
+        "mockResponse": { "success": true, "action": "stop", "duration_ms": 0 }
+    },
+    {
+        "name": "self.motor.move",
+        "description": "Drive with per-wheel speed and duration_ms auto-stop (preferred for mv:* tags).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "left": { "type": "integer", "minimum": -100, "maximum": 100 },
+                "right": { "type": "integer", "minimum": -100, "maximum": 100 },
+                "duration_ms": { "type": "integer", "minimum": 100, "maximum": 30000 }
+            },
+            "required": ["left", "right", "duration_ms"]
+        },
+        "mockResponse": {
+            "success": true,
+            "action": "move",
+            "duration_ms": "${duration_ms}",
+            "simulated": true
+        }
     },
     {
         "name": "self.motor.forward",
         "description": "Move robot forward. Use for: đi tới, tiến, đi thẳng, go forward.",
-        "inputSchema": { "type": "object", "properties": {} },
-        "mockResponse": { "success": true, "action": "forward" }
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "duration_ms": { "type": "integer", "minimum": 100, "maximum": 30000, "description": "Auto-stop after N ms (from server mv:f:N tag)" }
+            }
+        },
+        "mockResponse": { "success": true, "action": "forward", "duration_ms": "${duration_ms}" }
     },
     {
         "name": "self.motor.backward",
         "description": "Move robot backward. Use for: lùi, đi lùi, go back.",
-        "inputSchema": { "type": "object", "properties": {} },
-        "mockResponse": { "success": true, "action": "backward" }
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "duration_ms": { "type": "integer", "minimum": 100, "maximum": 30000 }
+            }
+        },
+        "mockResponse": { "success": true, "action": "backward", "duration_ms": "${duration_ms}" }
     },
     {
         "name": "self.motor.turn_left",
         "description": "Turn robot left in place. Use for: quay sang trái, rẽ trái, turn left.",
-        "inputSchema": { "type": "object", "properties": {} },
-        "mockResponse": { "success": true, "action": "turn_left" }
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "duration_ms": { "type": "integer", "minimum": 100, "maximum": 30000 }
+            }
+        },
+        "mockResponse": { "success": true, "action": "turn_left", "duration_ms": "${duration_ms}" }
     },
     {
         "name": "self.motor.turn_right",
         "description": "Turn robot right in place. Use for: quay sang phải, rẽ phải, turn right.",
-        "inputSchema": { "type": "object", "properties": {} },
-        "mockResponse": { "success": true, "action": "turn_right" }
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "duration_ms": { "type": "integer", "minimum": 100, "maximum": 30000 }
+            }
+        },
+        "mockResponse": { "success": true, "action": "turn_right", "duration_ms": "${duration_ms}" }
     },
     {
         "name": "self.chassis.turn_left",

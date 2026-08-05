@@ -131,7 +131,8 @@ def render_dynamic_memory(state: CharacterMemoryState) -> str:
     lines.append("")
     lines.append(
         "Use this memory naturally. Greet by name when known. "
-        "Do NOT mention 'memory' or 'database'. Do NOT store ephemeral questions."
+        "Do NOT mention 'memory' or 'database'. Do NOT store ephemeral questions. "
+        "To save new stable facts, append mem:* tags at the end of your reply (see System Rules)."
     )
     return "\n".join(lines)
 
@@ -209,12 +210,25 @@ class CharacterMemoryStore:
                 indent=2,
             )
 
-    def prepare_turn(self, device_id: str, user_text: str) -> CharacterMemoryState:
+    def prepare_turn(
+        self, device_id: str, user_text: str, *, auto_extract: bool = False
+    ) -> CharacterMemoryState:
         state = self.load(device_id)
-        if user_text and not _EPHEMERAL_RE.search(user_text):
+        if auto_extract and user_text and not _EPHEMERAL_RE.search(user_text):
             extract_stable_facts(state, user_text, self.character_id)
             self.save(device_id, state)
         return state
+
+    def apply_mem_tags(
+        self, device_id: str, tags: list[tuple[str, str]]
+    ) -> bool:
+        if not tags:
+            return False
+        state = self.load(device_id)
+        if not apply_memory_tag_entries(state, tags, self.character_id):
+            return False
+        self.save(device_id, state)
+        return True
 
     def after_turn(
         self,
@@ -223,6 +237,7 @@ class CharacterMemoryStore:
         assistant_text: str,
         *,
         rude: bool = False,
+        auto_extract: bool = False,
     ) -> CharacterMemoryState:
         state = self.load(device_id)
         state.turn_count += 1
@@ -232,7 +247,7 @@ class CharacterMemoryStore:
             state.relationship.friendliness = max(0, state.relationship.friendliness - 5)
         else:
             state.relationship.friendliness = min(100, state.relationship.friendliness + 2)
-        if user_text and not _EPHEMERAL_RE.search(user_text):
+        if auto_extract and user_text and not _EPHEMERAL_RE.search(user_text):
             extract_stable_facts(state, user_text, self.character_id)
         self.save(device_id, state)
         return state
@@ -374,6 +389,77 @@ def _add_inside_joke(state: CharacterMemoryState, joke: str) -> None:
     if j and j not in state.relationship.inside_jokes:
         state.relationship.inside_jokes.append(j)
         state.relationship.inside_jokes = state.relationship.inside_jokes[:_MAX_INSIDE_JOKES]
+
+
+def apply_memory_tag_entries(
+    state: CharacterMemoryState,
+    tags: list[tuple[str, str]],
+    character_id: str = "kira",
+) -> bool:
+    """Apply mem:category:value pairs from LLM reply tags. Returns True if state changed."""
+    changed = False
+    for category, raw_value in tags:
+        value = raw_value.strip()
+        if not value or _EPHEMERAL_RE.search(value):
+            continue
+        cat = category.lower().strip()
+        if cat == "like":
+            cleaned = _clean_like_phrase(value)
+            if _is_valid_like(cleaned):
+                before = len(state.user.likes)
+                _add_like(state, _normalize_like(cleaned))
+                _add_topic(state, _normalize_like(cleaned))
+                if len(state.user.likes) != before:
+                    changed = True
+        elif cat == "name":
+            name = value.title()
+            if _is_valid_name(name) and state.user.name != name:
+                state.user.name = name
+                if not state.user.preferred_name:
+                    state.user.preferred_name = name
+                changed = True
+        elif cat == "nick":
+            nick = value.strip()
+            if _is_valid_name(nick) and state.user.preferred_name != nick:
+                state.user.preferred_name = nick
+                _add_inside_joke(state, f"Calls user '{nick}'")
+                changed = True
+        elif cat == "pref":
+            pref = value[:120].strip()
+            if pref and pref not in state.user.stable_preferences:
+                _add_preference(state, pref)
+                changed = True
+        elif cat == "topic":
+            topic = value[:80].strip()
+            if topic:
+                before = len(state.relationship.shared_topics)
+                _add_topic(state, topic)
+                if len(state.relationship.shared_topics) != before:
+                    changed = True
+        elif cat == "joke":
+            joke = value[:120].strip()
+            if joke:
+                before = len(state.relationship.inside_jokes)
+                _add_inside_joke(state, joke)
+                if len(state.relationship.inside_jokes) != before:
+                    changed = True
+        elif cat == "birthday":
+            if re.match(
+                r"^\d{4}-\d{2}-\d{2}$|^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$", value
+            ):
+                state.user.birthday = value
+                changed = True
+        elif cat == "lang":
+            low = value.lower()
+            if "english" in low or low in ("en", "tiếng anh", "tieng anh"):
+                if state.user.favorite_language != "English":
+                    state.user.favorite_language = "English"
+                    changed = True
+            elif "vietnamese" in low or "việt" in low or low in ("vi", "tieng viet"):
+                if state.user.favorite_language != "Vietnamese":
+                    state.user.favorite_language = "Vietnamese"
+                    changed = True
+    return changed
 
 
 def extract_stable_facts(
