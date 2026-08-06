@@ -113,6 +113,8 @@ docker rmi ghcr.nju.edu.cn/xinnan-tech/xiaozhi-esp32-server:web_latest
 
 # 方式二：本地源码只运行Server
 
+> **Blue stack on macOS:** use [BLUE.md § macOS install dependencies](../BLUE.md#macos--install-dependencies-local-build) (Homebrew, pyenv 3.10.19, ffmpeg, opus, firewall). **Intel MacBook Pro 2019:** [macos-intel-build.md](./macos-intel-build.md). Run `./run.sh` from the repo root.
+
 ## 1.安装基础环境
 
 本项目使用`conda`管理依赖环境。如果不方便安装`conda`，需要根据实际的操作系统安装好`libopus`和`ffmpeg`。
