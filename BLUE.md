@@ -7,36 +7,234 @@ Backend for the [esp32-blue](https://github.com/) / `xiaozhi-esp32` firmware (Bl
 | `esp32-blue` / `xiaozhi-esp32` | ESP32-S3 firmware — **`blue-v2`** (pin-optimized PCB) or **`blue-v1`** (legacy) |
 | `esp32-server-blue` | Xiaozhi Python server + Kira character + robot motion |
 
-## Quick start (Mac)
+## Quick start (Ubuntu — Docker Compose)
+
+Requires Docker Engine + Compose v2 on Ubuntu (or any Linux host).
+
+```bash
+cd esp32-server-blue
+
+# Optional env (timezone, ports)
+cp docker/.env.example docker/.env
+
+# Config (API keys + LAN websocket URL for ESP32)
+mkdir -p main/xiaozhi-server/data main/xiaozhi-server/tmp
+cp main/xiaozhi-server/data/.config.yaml.example main/xiaozhi-server/data/.config.yaml
+# Edit data/.config.yaml:
+#   server.websocket: ws://<ubuntu-lan-ip>:8000/xiaozhi/v1/
+#   Gemini + OpenAI API keys
+
+chmod +x run-docker.sh
+./run-docker.sh up          # server on :8000 (WS) and :8003 (OTA/HTTP)
+./run-docker.sh logs
+```
+
+Verify OTA from another machine on the LAN:
+
+```bash
+curl http://<ubuntu-lan-ip>:8003/xiaozhi/ota/
+```
+
+Optional local Piper TTS (lower latency than Edge TTS):
+
+```bash
+./run-docker.sh up-tts
+./run-tts.sh setup
+# In data/.config.yaml: selected_module.TTS: CustomTTS
+# url: http://speaches:8000/v1/audio/speech  (Docker network name)
+```
+
+Point ESP32 OTA / WiFi config at `http://<ubuntu-lan-ip>:8003/xiaozhi/ota/`.
+
+First image build downloads PyTorch and can take several minutes.
+
+## macOS — install dependencies (local build)
+
+One-time setup on Mac (Apple Silicon or Intel) before `./run.sh`. Blue defaults use **cloud APIs** (Gemini LLM, OpenAI ASR, Edge TTS) — no local GPU or FunASR model required.
+
+### What you need
+
+| Item | Required | Notes |
+|------|----------|--------|
+| macOS 12+ | Yes | Ventura / Sonoma / Sequoia |
+| Xcode Command Line Tools | Yes | C compiler for some pip wheels |
+| [Homebrew](https://brew.sh/) | Recommended | Installs ffmpeg, opus, pyenv, git |
+| Python **3.10.19** | Yes | Via **pyenv** (see `.python-version`) |
+| ffmpeg | Yes | Checked at startup (`app.py`) |
+| libopus | Yes | Used by `opuslib_next` for ESP32 audio |
+| Docker Desktop | Optional | Local Piper TTS via `./run-tts.sh` |
+| FunASR model | Optional | Only if `selected_module.ASR: FunASR` |
+
+Disk: allow **~3 GB** for the venv (PyTorch + deps). RAM: **2 GB+** with all-API config; **4 GB+** if using local FunASR.
+
+### 1. Xcode Command Line Tools
+
+```bash
+xcode-select --install
+```
+
+### 2. Homebrew + system libraries
+
+Install Homebrew if missing: [https://brew.sh](https://brew.sh)
+
+```bash
+brew update
+brew install git pyenv ffmpeg opus
+```
+
+Verify:
+
+```bash
+ffmpeg -version    # must print "ffmpeg version ..."
+```
+
+### 3. pyenv + Python 3.10.19
+
+Add pyenv to your shell (zsh — append to `~/.zshrc` if not already there):
+
+```bash
+export PYENV_ROOT="$HOME/.pyenv"
+[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init -)"
+```
+
+Reload the shell (`source ~/.zshrc`), then:
+
+```bash
+pyenv install 3.10.19    # first time only; may take a few minutes
+cd esp32-server-blue/main/xiaozhi-server
+pyenv local 3.10.19      # reads .python-version
+python --version         # Python 3.10.19
+```
+
+### 4. Python venv + pip dependencies
 
 ```bash
 cd esp32-server-blue/main/xiaozhi-server
-
-# Python 3.10 (pyenv recommended)
-pyenv local 3.10.19
 python -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
-
-# Config (local, gitignored)
-mkdir -p data tmp
-cp data/.config.yaml.example data/.config.yaml   # or: ./run.sh auto-creates on first run
-# Edit data/.config.yaml — Gemini API key + OpenAI ASR key + LAN websocket URL
-
-# ASR model (optional if using OpenaiASR only)
-# Download model.pt → models/SenseVoiceSmall/model.pt
-# https://modelscope.cn/models/iic/SenseVoiceSmall/resolve/master/model.pt
 ```
 
-Run from repo root:
+First `pip install` downloads PyTorch and can take **10–20 minutes** on a slow connection.
+
+### 5. Config + API keys
 
 ```bash
+mkdir -p data tmp
+cp data/.config.yaml.example data/.config.yaml
+```
+
+Edit `data/.config.yaml`:
+
+| Key | Example |
+|-----|---------|
+| `server.websocket` | `ws://192.168.x.x:8000/xiaozhi/v1/` |
+| `server.vision_explain` | `http://192.168.x.x:8003/mcp/vision/explain` |
+| `LLM.GeminiLLM.api_key` | [Google AI Studio](https://aistudio.google.com/apikey) |
+| `ASR.OpenaiASR.api_key` | OpenAI API key |
+
+LAN IP on Mac:
+
+```bash
+ipconfig getifaddr en0    # Wi‑Fi; use en1 if en0 is empty
+```
+
+ESP32 OTA URL (WiFi portal → Advanced): `http://<lan-ip>:8003/xiaozhi/ota/`
+
+### 6. macOS Firewall (ESP32 / LAN access)
+
+If `curl http://127.0.0.1:8003/xiaozhi/ota/` works but `http://<lan-ip>:8003/...` fails, the firewall is blocking **pyenv Python**:
+
+**System Settings → Network → Firewall → Options** → find **python3.10** (`~/.pyenv/versions/3.10.19/bin/python3.10`) → **Allow incoming connections**.
+
+Or:
+
+```bash
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp \
+  "$HOME/.pyenv/versions/3.10.19/bin/python3.10"
+```
+
+### 7. Optional — local ASR (FunASR)
+
+Skip if using default **OpenaiASR**.
+
+```bash
+mkdir -p models/SenseVoiceSmall
+curl -L -o models/SenseVoiceSmall/model.pt \
+  "https://modelscope.cn/models/iic/SenseVoiceSmall/resolve/master/model.pt"
+```
+
+Set `selected_module.ASR: FunASR` in `data/.config.yaml`.
+
+### 8. Optional — Docker (local Piper TTS)
+
+For low-latency TTS instead of Edge TTS:
+
+```bash
+# Install Docker Desktop for Mac, then from repo root:
+chmod +x run-tts.sh
+./run-tts.sh setup
+```
+
+See [Local TTS (Piper / Speaches)](#local-tts-piper--speaches--low-latency) for `data/.config.yaml` changes.
+
+### 9. Optional — digital human (browser client)
+
+Uses the **same venv** as xiaozhi-server:
+
+```bash
+cd esp32-server-blue/main/xiaozhi-server
+source .venv/bin/activate
+pip install -r ../digital-human/wakeword_runtime/requirements.txt
+
+cd ../digital-human
+python start.py
+# Open http://127.0.0.1:8006/index.html
+```
+
+### Verify installation
+
+```bash
+cd esp32-server-blue
 ./run.sh
 ```
 
-WebSocket endpoint (default): `ws://<your-lan-ip>:8000/xiaozhi/v1/`
+In another terminal:
 
-Point the ESP32 OTA / WiFi config at that URL. Pin maps: [Blue V2 wiring](../esp32-blue/main/boards/blue-v2/WIRING.md) (new PCB) · [Blue V1](../esp32-blue/main/boards/blue-v1/WIRING.md) (legacy).
+```bash
+curl -s http://127.0.0.1:8003/xiaozhi/ota/ | head
+curl -s "http://$(ipconfig getifaddr en0):8003/xiaozhi/ota/" | head   # LAN
+```
+
+Logs: `main/xiaozhi-server/tmp/server.log`
+
+### Troubleshooting (macOS)
+
+| Symptom | Fix |
+|---------|-----|
+| `ffmpeg` not found / startup error | `brew install ffmpeg`, restart venv |
+| `Missing .venv` | Repeat step 4 |
+| Wrong Python version | `pyenv local 3.10.19` in `main/xiaozhi-server`, recreate venv |
+| LAN/ESP32 can't reach server | Firewall step 6; confirm `server.websocket` uses LAN IP |
+| `OSError: [Errno 22] Invalid argument` (aiohttp) | Already patched in `app.py` for macOS — pull latest |
+| Gemini / OpenAI errors | Check API keys and network; add proxy in config if blocked |
+
+---
+
+## Quick start (Mac)
+
+After [install dependencies](#macos--install-dependencies-local-build) above:
+
+```bash
+cd esp32-server-blue
+./run.sh
+```
+
+WebSocket endpoint: `ws://<your-lan-ip>:8000/xiaozhi/v1/`
+
+Point the ESP32 OTA / WiFi config at `http://<your-lan-ip>:8003/xiaozhi/ota/`. Pin maps: [Blue V2 wiring](../esp32-blue/main/boards/blue-v2/WIRING.md) (new PCB) · [Blue V1](../esp32-blue/main/boards/blue-v1/WIRING.md) (legacy).
 
 ## Blue-specific features
 
