@@ -64,8 +64,11 @@ One-time setup on Mac (Apple Silicon or Intel) before `./run.sh`. Blue defaults 
 | libopus | Yes | Used by `opuslib_next` for ESP32 audio |
 | Docker Desktop | Optional | Local Piper TTS via `./run-tts.sh` |
 | FunASR model | Optional | Only if `selected_module.ASR: FunASR` |
+| **ESP-IDF 6.0.2** | For firmware | Build/flash [esp32-blue](../esp32-blue/) (separate Python env) |
 
-Disk: allow **~3 GB** for the venv (PyTorch + deps). RAM: **2 GB+** with all-API config; **4 GB+** if using local FunASR.
+Disk: allow **~3 GB** for the server venv (PyTorch + deps) and **~5 GB** for ESP-IDF toolchains. RAM: **2 GB+** with all-API config; **4 GB+** if using local FunASR; **8 GB+** recommended for firmware builds.
+
+**Two Python environments:** the server uses **pyenv 3.10.19**; ESP-IDF installs its own **3.12** under `~/.espressif/`. Do not run `./run.sh` in a shell where `export.sh` is sourced unless you know what you are doing.
 
 ### 1. Xcode Command Line Tools
 
@@ -79,8 +82,10 @@ Install Homebrew if missing: [https://brew.sh](https://brew.sh)
 
 ```bash
 brew update
-brew install git pyenv ffmpeg opus
+brew install git pyenv ffmpeg opus cmake ninja dfu-util ccache
 ```
+
+`cmake`, `ninja`, and `dfu-util` are for **ESP-IDF** firmware builds. `ccache` speeds up rebuilds (optional).
 
 Verify:
 
@@ -194,7 +199,86 @@ python start.py
 # Open http://127.0.0.1:8006/index.html
 ```
 
+### 10. ESP-IDF (firmware — esp32-blue)
+
+Required to **build and flash** the Blue robot firmware. Skip if you only run the Python server.
+
+Official guide: [ESP-IDF macOS setup](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32/get-started/macos-setup.html)
+
+#### 10.1 Install ESP-IDF 6.0.2
+
+```bash
+mkdir -p ~/esp
+cd ~/esp
+git clone -b v6.0.2 --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf
+./install.sh esp32s3
+```
+
+First run downloads compilers and tools into `~/.espressif/` (**10–30 minutes**).
+
+Add to `~/.zshrc` (optional — load IDF in new terminals):
+
+```bash
+alias get_idf='. $HOME/esp/esp-idf/export.sh'
+```
+
+Then run `get_idf` before any `idf.py` / firmware build command.
+
+Verify:
+
+```bash
+source ~/esp/esp-idf/export.sh
+idf.py --version          # ESP-IDF v6.0.2
+python --version          # 3.12.x from ~/.espressif/python_env/...
+```
+
+#### 10.2 Build Blue firmware
+
+```bash
+cd esp32-blue
+source ~/esp/esp-idf/export.sh
+
+python scripts/build.py blue-v2    # new PCB (recommended)
+# python scripts/build.py blue-v1  # legacy PCB
+```
+
+First build fetches managed components and can take **15–30 minutes**.
+
+#### 10.3 Flash to hardware
+
+Connect the ESP32-S3 over USB, find the port, then flash:
+
+```bash
+ls /dev/cu.usbmodem* /dev/cu.usbserial* 2>/dev/null
+source ~/esp/esp-idf/export.sh
+cd esp32-blue
+idf.py -p /dev/cu.usbmodem1101 flash monitor    # replace with your port
+```
+
+In the serial monitor, set **OTA URL** (WiFi config portal → Advanced) to your server:
+
+`http://<mac-lan-ip>:8003/xiaozhi/ota/`
+
+Board docs: [Blue V2](../esp32-blue/main/boards/blue-v2/README.md) · [Blue V1](../esp32-blue/main/boards/blue-v1/README.md) · [Wiring](../esp32-blue/main/boards/blue-v2/WIRING.md)
+
+#### 10.4 QEMU (firmware without hardware)
+
+Requires ESP-IDF **6.x**. See [esp32-blue/main/boards/blue-v2/QEMU.md](../esp32-blue/main/boards/blue-v2/QEMU.md).
+
+```bash
+cd esp32-blue
+export IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf6.0_py3.12_env
+source ~/esp/esp-idf/export.sh
+python scripts/build.py blue-v2
+idf.py qemu
+```
+
+Adjust `IDF_PYTHON_ENV_PATH` if your env name differs: `ls ~/.espressif/python_env/`
+
 ### Verify installation
+
+**Server:**
 
 ```bash
 cd esp32-server-blue
@@ -210,6 +294,15 @@ curl -s "http://$(ipconfig getifaddr en0):8003/xiaozhi/ota/" | head   # LAN
 
 Logs: `main/xiaozhi-server/tmp/server.log`
 
+**Firmware (after step 10):**
+
+```bash
+source ~/esp/esp-idf/export.sh
+cd esp32-blue
+idf.py --version
+python scripts/build.py blue-v2    # should finish without errors
+```
+
 ### Troubleshooting (macOS)
 
 | Symptom | Fix |
@@ -220,6 +313,11 @@ Logs: `main/xiaozhi-server/tmp/server.log`
 | LAN/ESP32 can't reach server | Firewall step 6; confirm `server.websocket` uses LAN IP |
 | `OSError: [Errno 22] Invalid argument` (aiohttp) | Already patched in `app.py` for macOS — pull latest |
 | Gemini / OpenAI errors | Check API keys and network; add proxy in config if blocked |
+| `idf.py: command not found` | Run `source ~/esp/esp-idf/export.sh` (or `get_idf`) |
+| `./install.sh` fails on Mac | Install step 2 brew deps; ensure Xcode CLT installed |
+| USB port not found | Try another cable/port; `ls /dev/cu.usb*`; install [CP210x driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) if using UART bridge |
+| Firmware build OOM | Close other apps; first build needs ~8 GB RAM |
+| QEMU fails | Use IDF 6.0.2; set `IDF_PYTHON_ENV_PATH` — see step 10.4 |
 
 ---
 
@@ -431,20 +529,20 @@ If the browser still shows old wake words, clear site data for `127.0.0.1:8006` 
 
 ## Firmware dev (QEMU)
 
-Run Blue V1 in ESP-IDF QEMU without hardware — see firmware docs:
+Run Blue firmware in ESP-IDF QEMU without hardware — install [ESP-IDF (step 10)](#101-install-esp-idf-602) first.
 
+- [esp32-blue/main/boards/blue-v2/QEMU.md](../esp32-blue/main/boards/blue-v2/QEMU.md)
 - [esp32-blue/main/boards/blue-v1/QEMU.md](../esp32-blue/main/boards/blue-v1/QEMU.md)
 
-Quick run (after `python scripts/build.py blue-v1`):
-
 ```bash
-pkill -9 qemu-system-xtensa 2>/dev/null
-pkill -f "idf.py qemu" 2>/dev/null
+cd esp32-blue
 export IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf6.0_py3.12_env
 source ~/esp/esp-idf/export.sh
-cd ~/work/xiaozhi-esp32
+python scripts/build.py blue-v2
 idf.py qemu
 ```
+
+Pair with `./run.sh` on [esp32-server-blue](./BLUE.md) (WebSocket on your LAN).
 
 ## Upstream
 
