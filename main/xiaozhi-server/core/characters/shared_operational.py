@@ -83,6 +83,28 @@ When the user asks to change volume / make it louder / quieter, append **`vol:<0
 ❌ Bad: confirming volume change **without** `vol:N` — the speaker will not change"""
 
 
+def tof_calibrate_tags_prompt(*, example_tone: str = "kira") -> str:
+    if example_tone == "lili":
+        example = '✅ *"Okie, đặt vật trắng cách 10 cm trước mắt robot rồi mình hiệu chuẩn nha tof:cal:100"*'
+    else:
+        example = '✅ *"Dạ, bạn đặt vật phẳng màu trắng cách 10 cm trước cảm biến, mình hiệu chuẩn nha tof:cal:100"*'
+    return f"""## ToF distance sensor calibration (Blue robot body)
+This robot has a **VL53L0X** front distance sensor. It **can** be calibrated in software and **saved to flash**.
+
+When the user asks to **calibrate** the distance sensor / ToF / cảm biến khoảng cách:
+1. Tell them clearly to place a **flat white target** at the requested distance (default **10 cm / 100 mm**) **facing the front sensor**, hold still.
+2. Append **`tof:cal`** or **`tof:cal:<mm>`** at the **very end** of your reply (stripped before TTS).
+
+| User asks | Tag |
+|-----------|-----|
+| Hiệu chuẩn cảm biến (10 cm) | `tof:cal` or `tof:cal:100` |
+| Calibrate at 15 cm | `tof:cal:150` |
+
+{example}
+❌ Bad: *"Mình không hiệu chuẩn được"* / instruct manual steps **without** `tof:cal` — calibration will not run
+❌ Bad: confirming calibration **without** the tag — robot will not calibrate or save"""
+
+
 def character_switch_prompt_kira() -> str:
     return """## Character switch tags
 When the user asks to talk to **another** character (Lili, Kira, Coka), append at the **very end**:

@@ -894,6 +894,90 @@ class ConnectionHandler:
         )
         future.add_done_callback(_on_vol_done)
 
+    def _dispatch_tof_calibrate(self, distance_mm: int, *, label: str = "") -> None:
+        """Send self.tof.calibrate to the device (works with nointent + tof:cal tags)."""
+        from core.utils.tof_tag_codec import clamp_calibration_distance
+        from core.utils.util import sanitize_tool_name
+
+        distance_mm = clamp_calibration_distance(distance_mm)
+        dedupe_key = ("tof_cal", distance_mm)
+        if getattr(self, "_executed_tof_calibrate", None) == dedupe_key:
+            return
+
+        if not getattr(self, "func_handler", None) or not getattr(self, "loop", None):
+            self.logger.bind(tag=TAG).warning("[tof] skip — func_handler/loop missing")
+            return
+
+        candidates = (
+            "self.tof.calibrate",
+            "self_tof_calibrate",
+        )
+        available = self._robot_move_available_tools()
+        tool_name = None
+        for name in candidates:
+            if name in available:
+                tool_name = name
+                break
+            sanitized = sanitize_tool_name(name)
+            if sanitized in available:
+                tool_name = sanitized
+                break
+
+        if not tool_name:
+            self.logger.bind(tag=TAG).warning(
+                "[tof] skip — calibrate tool not available "
+                f"(available={len(available)})"
+            )
+            return
+
+        self._executed_tof_calibrate = dedupe_key
+        args_json = json.dumps({"distance_mm": distance_mm}, ensure_ascii=False)
+        self.logger.bind(tag=TAG).info(
+            f"[tof] dispatch tof:cal:{distance_mm} → {tool_name} args={args_json} "
+            f"(from={label or 'unknown'})"
+        )
+
+        def _on_tof_done(fut, dist=distance_mm, tool=tool_name):
+            try:
+                result = fut.result()
+                payload = getattr(result, "result", None) or getattr(result, "response", None)
+                self.logger.bind(tag=TAG).info(
+                    f"[tof] done tof:cal:{dist} → {tool} result={payload}"
+                )
+            except Exception as exc:
+                self.logger.bind(tag=TAG).error(
+                    f"[tof] failed tof:cal:{dist} → {tool}: {exc}"
+                )
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.func_handler.handle_llm_function_call(
+                self, {"name": tool_name, "arguments": args_json}
+            ),
+            self.loop,
+        )
+        future.add_done_callback(_on_tof_done)
+
+    def _dispatch_tof_from_assistant_text(
+        self, text: str, *, label: str = ""
+    ) -> bool:
+        from core.utils.tof_tag_codec import extract_tof_calibrate_from_assistant_text
+
+        if not text:
+            return False
+        distance_mm = extract_tof_calibrate_from_assistant_text(text)
+        if distance_mm is None:
+            return False
+        self._dispatch_tof_calibrate(distance_mm, label=label or "assistant")
+        return True
+
+    def _maybe_dispatch_tof_stt_fallback(self, *, label: str = "") -> None:
+        distance_mm = getattr(self, "_user_requested_tof_calibrate", None)
+        if distance_mm is None:
+            return
+        if getattr(self, "_executed_tof_calibrate", None) == ("tof_cal", distance_mm):
+            return
+        self._dispatch_tof_calibrate(distance_mm, label=label or "user_stt_fallback")
+
     def _dispatch_vol_from_assistant_text(
         self, text: str, *, label: str = ""
     ) -> bool:
@@ -1298,6 +1382,7 @@ class ConnectionHandler:
         )
         from core.utils.robot_move_codec import split_robot_move_tags
         from core.utils.volume_tag_codec import strip_vol_tags
+        from core.utils.tof_tag_codec import strip_tof_tags
 
         if not text:
             return ""
@@ -1313,7 +1398,11 @@ class ConnectionHandler:
         self._dispatch_vol_from_assistant_text(
             text, label="prepare_llm_text_for_tts"
         )
+        self._dispatch_tof_from_assistant_text(
+            text, label="prepare_llm_text_for_tts"
+        )
         cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
+        cleaned = strip_tof_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_vol_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_mem_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_char_tags(cleaned, trim_edges=trim_edges)
@@ -1347,6 +1436,7 @@ class ConnectionHandler:
             prepare_stream_chunk_for_tts,
         )
         from core.utils.volume_tag_codec import strip_vol_tags
+        from core.utils.tof_tag_codec import strip_tof_tags
 
         if flush_hold:
             held_mv = getattr(self, "_move_tag_stream_hold", "") or ""
@@ -1409,6 +1499,8 @@ class ConnectionHandler:
                 self, work, label="tts_stream"
             )
             self._dispatch_vol_from_assistant_text(work, label="tts_stream")
+            self._dispatch_tof_from_assistant_text(work, label="tts_stream")
+        cleaned = strip_tof_tags(cleaned or "", trim_edges=False)
         cleaned = strip_vol_tags(cleaned or "", trim_edges=False)
         cleaned = strip_mem_tags(cleaned or "", trim_edges=False)
         cleaned = strip_char_tags(cleaned or "", trim_edges=False)
@@ -1963,12 +2055,15 @@ class ConnectionHandler:
             from core.utils.language_runtime import update_locale_from_user_text
             from core.utils.robot_move_codec import user_requested_robot_move
             from core.utils.volume_tag_codec import infer_volume_from_user_text
+            from core.utils.tof_tag_codec import infer_tof_calibrate_from_user_text
 
             update_locale_from_user_text(self, query, reason="chat")
             if depth == 0:
                 self._user_requested_move = user_requested_robot_move(query)
                 self._user_requested_volume = infer_volume_from_user_text(query)
+                self._user_requested_tof_calibrate = infer_tof_calibrate_from_user_text(query)
                 self._last_dispatched_volume = None
+                self._executed_tof_calibrate = None
             self.logger.bind(tag=TAG).info(
                 f"大模型收到用户消息: {query} [locale={getattr(self, 'active_locale', 'vi')}]"
                 + (
@@ -1979,6 +2074,12 @@ class ConnectionHandler:
                 + (
                     f" [volume_intent={self._user_requested_volume}]"
                     if depth == 0 and getattr(self, "_user_requested_volume", None) is not None
+                    else ""
+                )
+                + (
+                    f" [tof_cal_intent={self._user_requested_tof_calibrate}]"
+                    if depth == 0
+                    and getattr(self, "_user_requested_tof_calibrate", None) is not None
                     else ""
                 )
             )
@@ -2379,6 +2480,7 @@ class ConnectionHandler:
                 )
 
             self._maybe_dispatch_volume_stt_fallback(label="chat_end")
+            self._maybe_dispatch_tof_stt_fallback(label="chat_end")
             self._enqueue_tts_stream_part(
                 current_sentence_id, "", flush_hold=True
             )
