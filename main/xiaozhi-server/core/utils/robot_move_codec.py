@@ -9,6 +9,7 @@ Protocol: ``mv:<code>[:<seconds>]`` appended **at end of reply**, e.g.
 | p    | turn right    | self.motor.turn_right     |
 | f    | forward       | self.motor.forward        |
 | b    | backward      | self.motor.backward       |
+| c    | circle (arc)  | self.motor.circle         |
 | s    | stop          | self.motor.stop           |
 
 Duration (seconds): optional suffix ``:N`` after code — default 5, max 30.
@@ -27,10 +28,10 @@ import re
 
 # mv:t  mv:t:10  Kita mv:f:5
 MOVE_TAG_RE = re.compile(
-    r"(?:\bKita\s+)?mv\s*:\s*([tprfbs])(?:\s*:\s*(\d+))?\b", re.IGNORECASE
+    r"(?:\bKita\s+)?mv\s*:\s*([tprfbsc])(?:\s*:\s*(\d+))?\b", re.IGNORECASE
 )
 MOVE_TAG_STRIP_RE = re.compile(
-    r"(?:\bKita\s+)?mv\s*:\s*[tprfbs](?:\s*:\s*\d+)?\b", re.IGNORECASE
+    r"(?:\bKita\s+)?mv\s*:\s*[tprfbsc](?:\s*:\s*\d+)?\b", re.IGNORECASE
 )
 
 _INCOMPLETE_MOVE_SUFFIX_RE = re.compile(
@@ -43,6 +44,7 @@ MOVE_CODE_TO_MCP: dict[str, tuple[str, ...]] = {
     "p": ("self.motor.turn_right", "self.chassis.turn_right"),
     "f": ("self.motor.forward", "self.chassis.go_forward"),
     "b": ("self.motor.backward", "self.chassis.go_back"),
+    "c": ("self.motor.circle",),
     "s": ("self.motor.stop",),
 }
 
@@ -51,6 +53,7 @@ MOVE_WHEEL_SPEEDS: dict[str, tuple[int, int]] = {
     "p": (70, -70),
     "f": (100, 100),
     "b": (-100, -100),
+    "c": (50, 100),
 }
 
 MOTOR_MOVE_TOOL_CANDIDATES: tuple[str, ...] = ("self.motor.move",)
@@ -62,8 +65,35 @@ _CAPABILITY_RE = re.compile(
     r"có thể đi|có thể quay|muốn mình làm gì|muốn em làm gì", re.IGNORECASE
 )
 _DURATION_IN_TEXT_RE = re.compile(
-    r"(?:trong|for)\s+(\d{1,2})\s*(?:gi(?:â|a)y|seconds?|secs?)\b", re.IGNORECASE
+    r"(?:trong|for)\s+(\d{1,2})\s*(?:gi(?:â|a)y|seconds?|secs?)\b",
+    re.IGNORECASE,
 )
+# "10 giây", "mười giây" at end of phrase (user ASR / assistant reply)
+_DURATION_VI_SUFFIX_RE = re.compile(
+    r"\b(\d{1,2}|mười|muoi|năm|nam|một|mot|hai|ba|bốn|bon|sáu|sau|bảy|bay|tám|tam|chín|chin)\s*"
+    r"(?:gi(?:â|a)y|seconds?|secs?)\b",
+    re.IGNORECASE,
+)
+_VI_NUMBER_WORDS: dict[str, int] = {
+    "một": 1,
+    "mot": 1,
+    "hai": 2,
+    "ba": 3,
+    "bốn": 4,
+    "bon": 4,
+    "năm": 5,
+    "nam": 5,
+    "sáu": 6,
+    "sau": 6,
+    "bảy": 7,
+    "bay": 7,
+    "tám": 8,
+    "tam": 8,
+    "chín": 9,
+    "chin": 9,
+    "mười": 10,
+    "muoi": 10,
+}
 _INFER_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
@@ -88,6 +118,14 @@ _INFER_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         "f",
     ),
     (re.compile(r"dừng(?:\s+lại)?", re.IGNORECASE), "s"),
+    (
+        re.compile(
+            r"đi\s+vòng\s+vòng|di\s+vong\s+vong|quay\s+vòng|quay\s+vong|"
+            r"đi\s+vòng|di\s+vong",
+            re.IGNORECASE,
+        ),
+        "c",
+    ),
 )
 
 
@@ -157,13 +195,25 @@ def extract_move_codes(text: str) -> list[str]:
     return [step.code for step in extract_move_steps(text)]
 
 
+def _parse_duration_token(token: str, *, max_sec: int) -> int:
+    token = (token or "").strip().lower()
+    if token.isdigit():
+        return clamp_duration(int(token), max_sec=max_sec)
+    if token in _VI_NUMBER_WORDS:
+        return clamp_duration(_VI_NUMBER_WORDS[token], max_sec=max_sec)
+    return clamp_duration(token, max_sec=max_sec)
+
+
 def infer_duration_from_text(text: str, *, max_sec: int = MAX_ROBOT_MOVE_DURATION_SEC) -> int | None:
     if not text:
         return None
     match = _DURATION_IN_TEXT_RE.search(text)
-    if not match:
-        return None
-    return clamp_duration(match.group(1), max_sec=max_sec)
+    if match:
+        return _parse_duration_token(match.group(1), max_sec=max_sec)
+    match = _DURATION_VI_SUFFIX_RE.search(text)
+    if match:
+        return _parse_duration_token(match.group(1), max_sec=max_sec)
+    return None
 
 
 def infer_mv_codes_multi(text: str) -> list[str]:
@@ -341,13 +391,18 @@ def build_mcp_call(
     if code == "s":
         return resolve_mcp_tool("s", available), {}
 
-    speeds = MOVE_WHEEL_SPEEDS.get(code)
-    move_tool = resolve_motor_move_tool(available)
     duration_ms = (
         step.duration_sec * 1000
         if step.duration_sec > 0
         else DEFAULT_ROBOT_MOVE_DURATION_SEC * 1000
     )
+
+    circle_tool = resolve_mcp_tool("c", available) if code == "c" else None
+    if circle_tool == "self.motor.circle" and step.duration_sec > 0:
+        return circle_tool, {"duration_ms": duration_ms}
+
+    speeds = MOVE_WHEEL_SPEEDS.get(code)
+    move_tool = resolve_motor_move_tool(available)
 
     if move_tool and speeds is not None and step.duration_sec > 0:
         left, right = speeds

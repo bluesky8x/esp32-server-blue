@@ -17,6 +17,7 @@ def robot_move_tags_prompt(*, example_tone: str = "kira") -> str:
     else:
         good_examples = (
             f'✅ Good: *"Mình quay trái 10 giây nha mv:t:10"*',
+            f'✅ Good: *"Dạ đi vòng vòng 10 giây nha mv:c:10"*',
             f'✅ Good: *"Mình đi tới, quẹo phải rồi dừng nha mv:f:5 mv:p:5 mv:s"*',
             f'✅ Good: *"Mình quay phải rồi quay trái nha mv:p mv:t"*',
             f'✅ Good: *"Rồi, mình quay phải đây mv:p"*',
@@ -31,6 +32,7 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:p | turn right — qua phải, sang phải, rẽ phải, quay phải |
 | mv:f | forward — đi tới, tiến, đi thẳng, đi lên |
 | mv:b | backward — lùi, đi lùi |
+| mv:c | circle — đi vòng vòng, quay vòng (NOT forward) |
 | mv:s | stop — dừng, dừng lại |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
@@ -41,6 +43,7 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 | Turn left ~5 s (default) | `mv:t` |
 | Turn left 10 s | `mv:t:10` |
 | Forward 30 s | `mv:f:30` |
+| Circle / đi vòng vòng 10 s | `mv:c:10` |
 | Multi-step with times | `mv:f:10 mv:p:5 mv:s` |
 
 **Format:** `<câu nói tự nhiên> mv:<code>[:<seconds>]` — tags always at the **very end**.
@@ -57,6 +60,27 @@ Only append a move code when the user clearly requests physical movement. No cod
 When you **confirm** you will move, you **must** append the matching `mv:*` — the robot will not move without it.
 **No STT fallback:** the server never reads the user's raw speech for movement; only your tags trigger the robot.
 **Emergency:** user may say *"dừng lại ngay"* — server cancels queued moves; you may still append `mv:s` when they ask to stop."""
+
+
+def volume_tags_prompt(*, example_tone: str = "kira") -> str:
+    if example_tone == "lili":
+        example = '✅ *"Okie, mình tăng loa lên 90 nha vol:90"*'
+    else:
+        example = '✅ *"Dạ, mình tăng âm lượng lên 90 nha vol:90"*'
+    return f"""## Speaker volume (Blue robot body)
+This robot **can** change speaker volume in software (0–100). **Never** tell the user to adjust volume manually on the device.
+
+When the user asks to change volume / make it louder / quieter, append **`vol:<0-100>`** at the **very end** of your reply (stripped before TTS), same style as `mv:*` tags.
+
+| User asks | You reply (example) |
+|-----------|---------------------|
+| Tăng âm lượng / to hơn | natural sentence + `vol:90` |
+| Giảm âm lượng / nhỏ hơn | natural sentence + `vol:40` |
+| Đặt volume 70 | natural sentence + `vol:70` |
+
+{example}
+❌ Bad: *"Bạn hãy chỉnh thủ công"* / *"Mình không điều chỉnh được loa"*
+❌ Bad: confirming volume change **without** `vol:N` — the speaker will not change"""
 
 
 def character_switch_prompt_kira() -> str:

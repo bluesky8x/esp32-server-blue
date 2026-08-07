@@ -51,6 +51,20 @@ async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text
     # 通话需要维持speaking状态
     if not conn.calling and sentenceType == SentenceType.LAST:
         await send_tts_message(conn, "stop", None)
+        pending_char = getattr(conn, "_pending_char_switch_greeting", None)
+        if pending_char:
+            conn._pending_char_switch_greeting = None
+            if conn.config.get("enable_greeting", True):
+                from core.utils.wake_greeting import speak_wake_greeting
+
+                char_id = str(pending_char)
+                conn.logger.bind(tag=TAG).info(
+                    f"Post-switch greeting queued → {char_id}"
+                )
+                if getattr(conn, "executor", None):
+                    conn.executor.submit(speak_wake_greeting, conn, char_id, "")
+                else:
+                    speak_wake_greeting(conn, char_id, "")
         if conn.close_after_chat:
             await conn.close()
 

@@ -92,6 +92,8 @@ def apply_char_switch_from_assistant_text(
         logger.bind(tag="char_switch").info(
             f"[char] switch → {char_id} (switched={switched}, from={label or 'assistant'})"
         )
+    if switched and conn.config.get("enable_greeting", True):
+        conn._pending_char_switch_greeting = char_id
     return char_id
 
 
