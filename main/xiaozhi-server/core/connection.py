@@ -832,6 +832,89 @@ class ConnectionHandler:
         )
         future.add_done_callback(_on_stop_done)
 
+    def _dispatch_set_volume(self, volume: int, *, label: str = "") -> None:
+        """Send self.audio_speaker.set_volume to the device (works with nointent + vol: tags)."""
+        from core.utils.util import sanitize_tool_name
+        from core.utils.volume_tag_codec import clamp_volume
+
+        volume = clamp_volume(volume)
+        last = getattr(self, "_last_dispatched_volume", None)
+        if last == volume:
+            return
+
+        if not getattr(self, "func_handler", None) or not getattr(self, "loop", None):
+            self.logger.bind(tag=TAG).warning("[vol] skip — func_handler/loop missing")
+            return
+
+        candidates = (
+            "self.audio_speaker.set_volume",
+            "self_audio_speaker_set_volume",
+        )
+        available = self._robot_move_available_tools()
+        tool_name = None
+        for name in candidates:
+            if name in available:
+                tool_name = name
+                break
+            sanitized = sanitize_tool_name(name)
+            if sanitized in available:
+                tool_name = sanitized
+                break
+
+        if not tool_name:
+            self.logger.bind(tag=TAG).warning(
+                "[vol] skip — set_volume tool not available "
+                f"(available={len(available)})"
+            )
+            return
+
+        self._last_dispatched_volume = volume
+        args_json = json.dumps({"volume": volume}, ensure_ascii=False)
+        self.logger.bind(tag=TAG).info(
+            f"[vol] dispatch vol:{volume} → {tool_name} args={args_json} "
+            f"(from={label or 'unknown'})"
+        )
+
+        def _on_vol_done(fut, vol=volume, tool=tool_name):
+            try:
+                fut.result()
+                self.logger.bind(tag=TAG).info(
+                    f"[vol] done vol:{vol} → {tool}"
+                )
+            except Exception as exc:
+                self.logger.bind(tag=TAG).error(
+                    f"[vol] failed vol:{vol} → {tool}: {exc}"
+                )
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.func_handler.handle_llm_function_call(
+                self, {"name": tool_name, "arguments": args_json}
+            ),
+            self.loop,
+        )
+        future.add_done_callback(_on_vol_done)
+
+    def _dispatch_vol_from_assistant_text(
+        self, text: str, *, label: str = ""
+    ) -> bool:
+        from core.utils.volume_tag_codec import extract_volume_from_assistant_text
+
+        if not text:
+            return False
+        volume = extract_volume_from_assistant_text(text)
+        if volume is None:
+            return False
+        self._dispatch_set_volume(volume, label=label or "assistant")
+        return True
+
+    def _maybe_dispatch_volume_stt_fallback(self, *, label: str = "") -> None:
+        volume = getattr(self, "_user_requested_volume", None)
+        if volume is None:
+            return
+        if getattr(self, "_last_dispatched_volume", None) == volume:
+            return
+        self._dispatch_set_volume(volume, label=label or "user_stt_fallback")
+
     def _robot_move_cooldown_remaining(self) -> float:
         return max(0.0, getattr(self, "_robot_move_cooldown_until", 0.0) - time.monotonic())
 
@@ -1214,6 +1297,7 @@ class ConnectionHandler:
             strip_sleep_tag,
         )
         from core.utils.robot_move_codec import split_robot_move_tags
+        from core.utils.volume_tag_codec import strip_vol_tags
 
         if not text:
             return ""
@@ -1226,7 +1310,11 @@ class ConnectionHandler:
         apply_sleep_tag_from_assistant_text(
             self, text, label="prepare_llm_text_for_tts"
         )
+        self._dispatch_vol_from_assistant_text(
+            text, label="prepare_llm_text_for_tts"
+        )
         cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
+        cleaned = strip_vol_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_mem_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_char_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_sleep_tag(cleaned, trim_edges=trim_edges)
@@ -1258,6 +1346,7 @@ class ConnectionHandler:
             finalize_stream_text_for_tts,
             prepare_stream_chunk_for_tts,
         )
+        from core.utils.volume_tag_codec import strip_vol_tags
 
         if flush_hold:
             held_mv = getattr(self, "_move_tag_stream_hold", "") or ""
@@ -1319,6 +1408,8 @@ class ConnectionHandler:
             apply_sleep_tag_from_assistant_text(
                 self, work, label="tts_stream"
             )
+            self._dispatch_vol_from_assistant_text(work, label="tts_stream")
+        cleaned = strip_vol_tags(cleaned or "", trim_edges=False)
         cleaned = strip_mem_tags(cleaned or "", trim_edges=False)
         cleaned = strip_char_tags(cleaned or "", trim_edges=False)
         cleaned = strip_sleep_tag(cleaned or "", trim_edges=False)
@@ -1871,15 +1962,23 @@ class ConnectionHandler:
             self.last_activity_time = time.time() * 1000
             from core.utils.language_runtime import update_locale_from_user_text
             from core.utils.robot_move_codec import user_requested_robot_move
+            from core.utils.volume_tag_codec import infer_volume_from_user_text
 
             update_locale_from_user_text(self, query, reason="chat")
             if depth == 0:
                 self._user_requested_move = user_requested_robot_move(query)
+                self._user_requested_volume = infer_volume_from_user_text(query)
+                self._last_dispatched_volume = None
             self.logger.bind(tag=TAG).info(
                 f"大模型收到用户消息: {query} [locale={getattr(self, 'active_locale', 'vi')}]"
                 + (
                     f" [move_intent={self._user_requested_move}]"
                     if depth == 0
+                    else ""
+                )
+                + (
+                    f" [volume_intent={self._user_requested_volume}]"
+                    if depth == 0 and getattr(self, "_user_requested_volume", None) is not None
                     else ""
                 )
             )
@@ -2279,6 +2378,7 @@ class ConnectionHandler:
                     auto_extract=self._character_memory_auto_extract(),
                 )
 
+            self._maybe_dispatch_volume_stt_fallback(label="chat_end")
             self._enqueue_tts_stream_part(
                 current_sentence_id, "", flush_hold=True
             )
