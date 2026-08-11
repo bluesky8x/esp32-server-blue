@@ -59,6 +59,14 @@ log:
 delete_audio: true
 # 没有语音输入多久后断开连接(秒)，默认2分钟，即120秒
 close_connection_no_voice_time: 120
+# Pre-ASR gate: reject noise/music (Blue V2 INMP441 may fail strict speech-band ratio)
+speech_filter:
+  min_rms: 180
+  min_duration_ms: 450
+  min_speech_band_ratio: 0.24
+  max_zcr: 0.42
+  rms_bypass: 1500
+  rms_bypass_min_ratio: 0.18
 # TTS请求超时时间(秒)
 tts_timeout: 10
 # 工具调用超时时间(秒)

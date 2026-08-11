@@ -102,11 +102,13 @@ class ASRProviderBase(ABC):
 
             from core.utils.speech_filter import is_likely_speech, is_noise_transcript
 
-            if not is_likely_speech(combined_pcm_data):
-                analysis = analyze_pcm(combined_pcm_data)
+            speech_cfg = (getattr(conn, "config", None) or {}).get("speech_filter")
+            if not is_likely_speech(combined_pcm_data, speech_cfg):
+                analysis = analyze_pcm(combined_pcm_data, speech_cfg)
                 logger.bind(tag=TAG).info(
                     f"丢弃非语音音频: {analysis.get('reason', 'unknown')} "
-                    f"(rms={analysis.get('rms')}, dur={analysis.get('duration_ms')})"
+                    f"(rms={analysis.get('rms')}, speech_ratio={analysis.get('speech_ratio')}, "
+                    f"zcr={analysis.get('zcr')}, dur={analysis.get('duration_ms')})"
                 )
                 self.stop_ws_connection()
                 return

@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
 _SAMPLE_RATE = 16000
 
-# Minimum RMS (int16 scale) — below this is silence / mic hiss
-_MIN_RMS = 180
-# Minimum utterance length to send to ASR
-_MIN_DURATION_MS = 450
-# Share of energy in typical speech band (300–3400 Hz)
-_MIN_SPEECH_BAND_RATIO = 0.32
-# Very high ZCR often means noise/hiss
-_MAX_ZCR = 0.42
+# Defaults — override via config.yaml `speech_filter:` (Blue V2 INMP441 + motor EMI)
+_DEFAULT_MIN_RMS = 180
+_DEFAULT_MIN_DURATION_MS = 450
+_DEFAULT_MIN_SPEECH_BAND_RATIO = 0.24
+_DEFAULT_MAX_ZCR = 0.42
+# Strong RMS bypass: robot mic often has hiss outside 300–3400 Hz but speech is still usable
+_DEFAULT_RMS_BYPASS = 1500
+_DEFAULT_RMS_BYPASS_MIN_RATIO = 0.18
 
 _FILLER_ONLY_RE = re.compile(
     r"^(?:"
@@ -47,8 +47,25 @@ _MUSIC_HALLUCINATION_RE = re.compile(
 )
 
 
-def analyze_pcm(pcm_bytes: bytes) -> dict[str, Any]:
+def _thresholds(cfg: Mapping[str, Any] | None) -> dict[str, float]:
+    c = cfg or {}
+    return {
+        "min_rms": float(c.get("min_rms", _DEFAULT_MIN_RMS)),
+        "min_duration_ms": float(c.get("min_duration_ms", _DEFAULT_MIN_DURATION_MS)),
+        "min_speech_band_ratio": float(
+            c.get("min_speech_band_ratio", _DEFAULT_MIN_SPEECH_BAND_RATIO)
+        ),
+        "max_zcr": float(c.get("max_zcr", _DEFAULT_MAX_ZCR)),
+        "rms_bypass": float(c.get("rms_bypass", _DEFAULT_RMS_BYPASS)),
+        "rms_bypass_min_ratio": float(
+            c.get("rms_bypass_min_ratio", _DEFAULT_RMS_BYPASS_MIN_RATIO)
+        ),
+    }
+
+
+def analyze_pcm(pcm_bytes: bytes, cfg: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Heuristic check: is this chunk likely human speech (not only noise/music)?"""
+    t = _thresholds(cfg)
     if not pcm_bytes or len(pcm_bytes) < 640:
         return {"valid": False, "reason": "too_short_bytes"}
 
@@ -58,15 +75,15 @@ def analyze_pcm(pcm_bytes: bytes) -> dict[str, Any]:
 
     duration_ms = len(audio) / _SAMPLE_RATE * 1000
     rms = float(np.sqrt(np.mean(audio**2)))
-    if rms < _MIN_RMS:
+    if rms < t["min_rms"]:
         return {"valid": False, "reason": "too_quiet", "rms": rms, "duration_ms": duration_ms}
 
-    if duration_ms < _MIN_DURATION_MS:
+    if duration_ms < t["min_duration_ms"]:
         return {"valid": False, "reason": "too_short", "rms": rms, "duration_ms": duration_ms}
 
     signs = np.sign(audio)
     zcr = float(np.mean(np.abs(np.diff(signs)) > 0) / 2)
-    if zcr > _MAX_ZCR:
+    if zcr > t["max_zcr"]:
         return {"valid": False, "reason": "high_zcr", "rms": rms, "zcr": zcr}
 
     window = np.hanning(len(audio))
@@ -74,13 +91,25 @@ def analyze_pcm(pcm_bytes: bytes) -> dict[str, Any]:
     freqs = np.fft.rfftfreq(len(audio), 1 / _SAMPLE_RATE)
     speech_mask = (freqs >= 300) & (freqs <= 3400)
     speech_ratio = float(np.sum(spectrum[speech_mask]) / (np.sum(spectrum) + 1e-8))
-    if speech_ratio < _MIN_SPEECH_BAND_RATIO:
+
+    if rms >= t["rms_bypass"] and speech_ratio >= t["rms_bypass_min_ratio"]:
+        return {
+            "valid": True,
+            "rms": rms,
+            "zcr": zcr,
+            "speech_ratio": speech_ratio,
+            "duration_ms": duration_ms,
+            "bypass": "rms",
+        }
+
+    if speech_ratio < t["min_speech_band_ratio"]:
         return {
             "valid": False,
             "reason": "low_speech_band",
             "rms": rms,
             "speech_ratio": speech_ratio,
             "duration_ms": duration_ms,
+            "zcr": zcr,
         }
 
     return {
@@ -92,8 +121,8 @@ def analyze_pcm(pcm_bytes: bytes) -> dict[str, Any]:
     }
 
 
-def is_likely_speech(pcm_bytes: bytes) -> bool:
-    return analyze_pcm(pcm_bytes).get("valid", False)
+def is_likely_speech(pcm_bytes: bytes, cfg: Mapping[str, Any] | None = None) -> bool:
+    return analyze_pcm(pcm_bytes, cfg).get("valid", False)
 
 
 def is_noise_transcript(text: str) -> bool:
