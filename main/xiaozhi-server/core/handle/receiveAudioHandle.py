@@ -60,6 +60,8 @@ async def handleAudioMessage(conn: "ConnectionHandler", pcm_frame):
         return
     if getattr(conn, "_robot_mute_mic_active", False):
         conn._robot_mute_mic_active = False
+        conn.reset_audio_states()
+        conn._asr_rms_loud_frames = 0
 
     # 当前片段是否有人说话
     have_voice = conn.vad.is_vad(conn, pcm_frame)

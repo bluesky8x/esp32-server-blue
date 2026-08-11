@@ -59,7 +59,16 @@ MOVE_WHEEL_SPEEDS: dict[str, tuple[int, int]] = {
 MOTOR_MOVE_TOOL_CANDIDATES: tuple[str, ...] = ("self.motor.move",)
 
 _REFUSAL_RE = re.compile(
-    r"không thể|cannot|không quay|không đi|không làm được", re.IGNORECASE
+    r"không thể|cannot|không quay|không đi(?! tiếp)|không làm được", re.IGNORECASE
+)
+_STOP_PHRASE_RE = re.compile(
+    r"(?:"
+    r"không\s+đi\s+tiếp|khong\s+di\s+tiep|"
+    r"đứng\s+lại|dung\s+lai|ngừng\s+lại|ngung\s+lai|"
+    r"thôi\s+(?:đi|lại)|thoi\s+(?:di|lai)|"
+    r"stop(?:\s+now)?"
+    r")",
+    re.IGNORECASE,
 )
 _CAPABILITY_RE = re.compile(
     r"có thể đi|có thể quay|muốn mình làm gì|muốn em làm gì", re.IGNORECASE
@@ -220,6 +229,8 @@ def infer_mv_codes_multi(text: str) -> list[str]:
     if not text or not str(text).strip():
         return []
     t = str(text).strip()
+    if _STOP_PHRASE_RE.search(t):
+        return ["s"]
     if _REFUSAL_RE.search(t) or _CAPABILITY_RE.search(t):
         return []
     if re.search(r"\bhoặc\b", t, re.IGNORECASE) and (

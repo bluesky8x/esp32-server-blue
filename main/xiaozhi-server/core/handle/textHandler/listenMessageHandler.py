@@ -37,6 +37,13 @@ class ListenTextMessageHandler(TextMessageHandler):
             # Device back to listening — ensure ASR accepts uplink (not stuck in speaking).
             conn.clearSpeakStatus()
             conn.reset_audio_states()
+            conn._robot_mute_mic_active = False
+            conn._robot_motor_active_until = 0.0
+            conn._asr_rms_loud_frames = 0
+            relax_sec = float(
+                ((conn.config.get("speech_filter") or {}).get("motor_relax_sec", 45))
+            )
+            conn._speech_filter_relax_until = time.monotonic() + min(relax_sec, 30.0)
         elif msg_json["state"] == "stop":
             # 收到stop但asr未初始化，跳过处理
             if conn.asr is None:

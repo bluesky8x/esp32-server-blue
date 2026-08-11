@@ -30,6 +30,20 @@ logger = setup_logging()
 
 # ~9s @ 60ms/frame — force ASR if VAD never sees silence (motor hiss / EMI)
 _MAX_ASR_PCM_FRAMES = 150
+# ~1.5s of loud uplink when VAD misses speech (post-motor INMP441)
+_RMS_FALLBACK_THRESHOLD = 800
+_RMS_FALLBACK_FRAMES = 25
+
+
+def _pcm_frame_rms(pcm_frame: bytes) -> float:
+    if not pcm_frame or len(pcm_frame) < 4:
+        return 0.0
+    import numpy as np
+
+    samples = np.frombuffer(pcm_frame, dtype=np.int16).astype(np.float32)
+    if len(samples) == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(samples**2)))
 
 
 class ASRProviderBase(ABC):
@@ -76,8 +90,24 @@ class ASRProviderBase(ABC):
 
             # 如果没有语音，且之前也没有声音，缓存部分音频
             if not audio_have_voice and not conn.client_have_voice:
-                conn.asr_audio = conn.asr_audio[-10:]
-                return
+                rms = _pcm_frame_rms(pcm_frame)
+                loud_frames = getattr(conn, "_asr_rms_loud_frames", 0)
+                if rms >= _RMS_FALLBACK_THRESHOLD:
+                    loud_frames += 1
+                else:
+                    loud_frames = 0
+                conn._asr_rms_loud_frames = loud_frames
+                if loud_frames >= _RMS_FALLBACK_FRAMES:
+                    conn.client_have_voice = True
+                    conn.client_voice_stop = True
+                    conn._asr_rms_loud_frames = 0
+                    logger.bind(tag=TAG).info(
+                        f"Force ASR: RMS fallback rms={rms:.0f} "
+                        "(VAD missed speech after motor/ambient noise)"
+                    )
+                else:
+                    conn.asr_audio = conn.asr_audio[-10:]
+                    return
 
             if len(conn.asr_audio) > _MAX_ASR_PCM_FRAMES:
                 conn.client_voice_stop = True

@@ -152,6 +152,7 @@ class ConnectionHandler:
         self.vad_speech_start_time = 0.0
         self.client_voice_stop = False
         self.last_is_voice = False
+        self._asr_rms_loud_frames = 0
 
         # asr相关变量
         # 因为实际部署时可能会用到公共的本地ASR，不能把变量暴露给公共ASR
@@ -1070,6 +1071,19 @@ class ConnectionHandler:
             )
             return
         self._dispatch_set_volume(volume, label=label or "user_stt_fallback")
+
+    def _maybe_dispatch_mv_stt_fallback(self, *, label: str = "") -> None:
+        """User said stop (e.g. không đi tiếp) — cancel queue and send motor.stop."""
+        from core.utils.robot_move_codec import infer_mv_codes_multi
+
+        text = getattr(self, "_last_user_text", "") or ""
+        codes = infer_mv_codes_multi(text)
+        if codes != ["s"]:
+            return
+        self.logger.bind(tag=TAG).info(
+            f"[mv] stt stop fallback ({label or 'user'}): «{text[:60]}»"
+        )
+        self.emergency_stop_robot_moves(label=f"stt_stop:{label or 'user'}")
 
     def _robot_move_cooldown_remaining(self) -> float:
         return max(0.0, getattr(self, "_robot_move_cooldown_until", 0.0) - time.monotonic())
@@ -2191,6 +2205,10 @@ class ConnectionHandler:
             update_locale_from_user_text(self, query, reason="chat")
             if depth == 0:
                 self._user_requested_move = user_requested_robot_move(query)
+                from core.utils.robot_move_codec import infer_mv_codes_multi
+
+                if infer_mv_codes_multi(query) == ["s"]:
+                    self.emergency_stop_robot_moves(label="user_stop_stt")
                 self._user_requested_volume = infer_volume_from_user_text(query)
                 self._user_requested_tof_calibrate = infer_tof_calibrate_from_user_text(query)
                 self._last_dispatched_volume = None
@@ -2237,6 +2255,9 @@ class ConnectionHandler:
             self._robot_move_cooldown_until = 0.0
             self._robot_move_shutdown = False
             self._robot_move_pump_handle = None
+            self._robot_motor_active_until = 0.0
+            self._robot_mute_mic_active = False
+            self._asr_rms_loud_frames = 0
             self.dialogue.put(Message(role="user", content=query))
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
@@ -2616,6 +2637,7 @@ class ConnectionHandler:
 
             self._maybe_dispatch_volume_stt_fallback(label="chat_end")
             self._maybe_dispatch_tof_stt_fallback(label="chat_end")
+            self._maybe_dispatch_mv_stt_fallback(label="chat_end")
             self._enqueue_tts_stream_part(
                 current_sentence_id, "", flush_hold=True
             )
