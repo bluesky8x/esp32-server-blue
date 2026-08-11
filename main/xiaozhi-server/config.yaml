@@ -63,10 +63,14 @@ close_connection_no_voice_time: 120
 speech_filter:
   min_rms: 180
   min_duration_ms: 450
-  min_speech_band_ratio: 0.24
+  min_speech_band_ratio: 0.14
   max_zcr: 0.42
   rms_bypass: 1500
-  rms_bypass_min_ratio: 0.18
+  rms_bypass_min_ratio: 0.12
+  # After motor MCP: relax band-ratio gate (INMP441 EMI outside 300–3400 Hz)
+  motor_relax_sec: 45
+  motor_relax_min_ratio: 0.10
+  motor_relax_rms_bypass_ratio: 0.08
 # TTS请求超时时间(秒)
 tts_timeout: 10
 # 工具调用超时时间(秒)

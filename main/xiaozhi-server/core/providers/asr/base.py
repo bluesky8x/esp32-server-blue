@@ -28,6 +28,9 @@ if TYPE_CHECKING:
 TAG = __name__
 logger = setup_logging()
 
+# ~9s @ 60ms/frame — force ASR if VAD never sees silence (motor hiss / EMI)
+_MAX_ASR_PCM_FRAMES = 150
+
 
 class ASRProviderBase(ABC):
     def __init__(self):
@@ -76,6 +79,13 @@ class ASRProviderBase(ABC):
                 conn.asr_audio = conn.asr_audio[-10:]
                 return
 
+            if len(conn.asr_audio) > _MAX_ASR_PCM_FRAMES:
+                conn.client_voice_stop = True
+                logger.bind(tag=TAG).info(
+                    f"Force ASR: utterance buffer capped at {_MAX_ASR_PCM_FRAMES} frames "
+                    "(VAD may be stuck on motor/ambient noise)"
+                )
+
             # 自动模式下通过VAD检测到语音停止时触发识别
             if conn.asr.interface_type != InterfaceType.STREAM and conn.client_voice_stop:
                 # 直接使用asr_audio中的PCM数据
@@ -103,13 +113,18 @@ class ASRProviderBase(ABC):
             from core.utils.speech_filter import is_likely_speech, is_noise_transcript
 
             speech_cfg = (getattr(conn, "config", None) or {}).get("speech_filter")
-            if not is_likely_speech(combined_pcm_data, speech_cfg):
-                analysis = analyze_pcm(combined_pcm_data, speech_cfg)
+            if not is_likely_speech(combined_pcm_data, speech_cfg, conn):
+                analysis = analyze_pcm(combined_pcm_data, speech_cfg, conn)
                 logger.bind(tag=TAG).info(
                     f"丢弃非语音音频: {analysis.get('reason', 'unknown')} "
                     f"(rms={analysis.get('rms')}, speech_ratio={analysis.get('speech_ratio')}, "
-                    f"zcr={analysis.get('zcr')}, dur={analysis.get('duration_ms')})"
+                    f"zcr={analysis.get('zcr')}, dur={analysis.get('duration_ms')}"
+                    f"{', motor_relaxed' if analysis.get('motor_relaxed') else ''})"
                 )
+                rms = analysis.get("rms") or 0
+                min_rms = float((speech_cfg or {}).get("min_rms", 180))
+                if rms >= min_rms:
+                    conn.last_activity_time = time.time() * 1000
                 self.stop_ws_connection()
                 return
 

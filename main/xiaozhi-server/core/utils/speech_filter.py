@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+import time
+from typing import Any, Mapping, TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from core.connection import ConnectionHandler
 
 _SAMPLE_RATE = 16000
 
@@ -60,12 +64,40 @@ def _thresholds(cfg: Mapping[str, Any] | None) -> dict[str, float]:
         "rms_bypass_min_ratio": float(
             c.get("rms_bypass_min_ratio", _DEFAULT_RMS_BYPASS_MIN_RATIO)
         ),
+        "motor_relax_min_ratio": float(c.get("motor_relax_min_ratio", 0.12)),
+        "motor_relax_rms_bypass_ratio": float(
+            c.get("motor_relax_rms_bypass_ratio", 0.10)
+        ),
     }
 
 
-def analyze_pcm(pcm_bytes: bytes, cfg: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _apply_motor_relax(
+    t: dict[str, float], conn: "ConnectionHandler | None"
+) -> dict[str, float]:
+    """Loosen band-ratio gate briefly after robot motor moves (INMP441 + EMI)."""
+    if conn is None:
+        return t
+    until = getattr(conn, "_speech_filter_relax_until", 0.0)
+    if time.monotonic() >= until:
+        return t
+    out = dict(t)
+    out["min_speech_band_ratio"] = min(
+        out["min_speech_band_ratio"], out["motor_relax_min_ratio"]
+    )
+    out["rms_bypass_min_ratio"] = min(
+        out["rms_bypass_min_ratio"], out["motor_relax_rms_bypass_ratio"]
+    )
+    out["motor_relaxed"] = 1.0
+    return out
+
+
+def analyze_pcm(
+    pcm_bytes: bytes,
+    cfg: Mapping[str, Any] | None = None,
+    conn: "ConnectionHandler | None" = None,
+) -> dict[str, Any]:
     """Heuristic check: is this chunk likely human speech (not only noise/music)?"""
-    t = _thresholds(cfg)
+    t = _apply_motor_relax(_thresholds(cfg), conn)
     if not pcm_bytes or len(pcm_bytes) < 640:
         return {"valid": False, "reason": "too_short_bytes"}
 
@@ -121,8 +153,12 @@ def analyze_pcm(pcm_bytes: bytes, cfg: Mapping[str, Any] | None = None) -> dict[
     }
 
 
-def is_likely_speech(pcm_bytes: bytes, cfg: Mapping[str, Any] | None = None) -> bool:
-    return analyze_pcm(pcm_bytes, cfg).get("valid", False)
+def is_likely_speech(
+    pcm_bytes: bytes,
+    cfg: Mapping[str, Any] | None = None,
+    conn: "ConnectionHandler | None" = None,
+) -> bool:
+    return analyze_pcm(pcm_bytes, cfg, conn).get("valid", False)
 
 
 def is_noise_transcript(text: str) -> bool:

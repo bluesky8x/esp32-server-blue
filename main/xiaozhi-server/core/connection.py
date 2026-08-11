@@ -178,6 +178,7 @@ class ConnectionHandler:
         self._robot_move_in_flight = False
         self._robot_move_pump_scheduled = False
         self._robot_move_cooldown_until = 0.0
+        self._speech_filter_relax_until = 0.0
         self._robot_move_shutdown = False
         self._robot_move_pump_handle = None
 
@@ -1393,6 +1394,10 @@ class ConnectionHandler:
                     f"[mv] failed mv:{format_move_step(mv_step)} → {tool}: {exc}"
                 )
             self._start_robot_move_cooldown(mv_duration if mv_step.code != "s" else None)
+            relax_sec = float(
+                ((self.config.get("speech_filter") or {}).get("motor_relax_sec", 45))
+            )
+            self._speech_filter_relax_until = time.monotonic() + relax_sec
             self.clearSpeakStatus()
             self.reset_audio_states()
             if (
