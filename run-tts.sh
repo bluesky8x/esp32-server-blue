@@ -3,8 +3,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-TTS_DIR="$ROOT/main/xiaozhi-server/docker/tts"
-COMPOSE="docker compose -f $TTS_DIR/docker-compose.yml"
+COMPOSE_FILE="$ROOT/docker-compose.yml"
+LEGACY_COMPOSE="$ROOT/main/xiaozhi-server/docker/tts/docker-compose.yml"
+ENV_FILE="$ROOT/docker/.env"
+
+if [[ -f "$COMPOSE_FILE" ]]; then
+  COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile tts)
+  [[ -f "$ENV_FILE" ]] && COMPOSE+=(--env-file "$ENV_FILE")
+else
+  COMPOSE=(docker compose -f "$LEGACY_COMPOSE")
+fi
 PORT="${TTS_HOST_PORT:-8881}"
 BASE="http://127.0.0.1:${PORT}"
 
@@ -30,32 +38,32 @@ download_models() {
   fi
 
   echo "Downloading Vietnamese Piper model: $VI_MODEL"
-  $COMPOSE exec -T speaches uv tool run speaches-cli model download "$VI_MODEL"
+  "${COMPOSE[@]}" exec -T speaches uv tool run speaches-cli model download "$VI_MODEL"
 
   echo "Downloading English Piper model: $EN_MODEL"
-  $COMPOSE exec -T speaches uv tool run speaches-cli model download "$EN_MODEL"
+  "${COMPOSE[@]}" exec -T speaches uv tool run speaches-cli model download "$EN_MODEL"
 
   echo "Installed TTS models:"
-  $COMPOSE exec -T speaches uv tool run speaches-cli model ls --task text-to-speech || true
+  "${COMPOSE[@]}" exec -T speaches uv tool run speaches-cli model ls --task text-to-speech || true
 }
 
 case "$cmd" in
   up)
-    $COMPOSE up -d
+    "${COMPOSE[@]}" up -d speaches
     echo "Speaches TTS: $BASE/v1/audio/speech"
     echo "Next: $0 setup   # download vi/en Piper models"
     ;;
   down)
-    $COMPOSE down
+    "${COMPOSE[@]}" stop speaches
     ;;
   setup)
-    $COMPOSE up -d
+    "${COMPOSE[@]}" up -d speaches
     download_models
     echo ""
     echo "Done. Test with: $0 test"
     ;;
   logs)
-    $COMPOSE logs -f --tail=100
+    "${COMPOSE[@]}" logs -f --tail=100 speaches
     ;;
   test)
     echo "VI test → /tmp/blue-tts-vi.wav"

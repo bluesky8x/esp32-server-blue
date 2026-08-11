@@ -208,16 +208,21 @@ First run: **20–40 minutes** on MBP 2019 Intel (downloads x86_64 toolchains to
 Add to `~/.zshrc`:
 
 ```bash
-alias get_idf='. $HOME/esp/esp-idf/export.sh'
+get_idf() {
+  export IDF_PYTHON_ENV_PATH="$HOME/.espressif/python_env/idf6.0_py3.12_env"
+  . "$HOME/esp/esp-idf/export.sh"
+}
 ```
 
 Verify:
 
 ```bash
-source ~/esp/esp-idf/export.sh
+get_idf
 idf.py --version
-python --version    # 3.12.x under ~/.espressif/
+python --version    # 3.12.x from ~/.espressif/
 ```
+
+> **`idf6.0_py3.14_env not found`:** default `python3` is 3.14; your IDF venv is **3.12**. Use `get_idf` (sets `IDF_PYTHON_ENV_PATH`) — see [Troubleshooting § Python 3.14](#troubleshooting-intel-macbook-pro-2019).
 
 ---
 
@@ -339,7 +344,8 @@ QEMU on Intel Mac is **slower than Apple Silicon** but fine for protocol testing
 | `brew: command not found` | Run `eval "$(/usr/local/bin/brew shellenv)"` |
 | Wrong arch packages | Confirm `uname -m` is `x86_64`; don't use Rosetta Terminal for builds |
 | Server LAN fails, localhost OK | Firewall §5 — unblock pyenv `python3.10` |
-| `idf.py: command not found` | `source ~/esp/esp-idf/export.sh` |
+| `idf.py: command not found` | Run `get_idf` (not bare `source export.sh`) |
+| `idf6.0_py3.14_env not found` | Shell uses Python **3.14**; IDF 6.0.2 needs **3.12** — see below |
 | USB port missing | Different cable/port; hold BOOT while plug-in; check `system_profiler SPUSBDataType` |
 | Build killed / frozen | 8 GB RAM — quit browsers; build server and firmware **one at a time** |
 | Very slow compiles | Expected on 2019 Intel; use `ccache`; plug in power adapter |
@@ -358,6 +364,32 @@ QEMU on Intel Mac is **slower than Apple Silicon** but fine for protocol testing
 | `./run.sh` runtime | Fine for dev | Similar |
 
 Intel is fully supported; builds are just slower and RAM is tighter.
+
+### Python 3.14 vs ESP-IDF 6.0.2
+
+If `source ~/esp/esp-idf/export.sh` prints:
+
+```text
+ERROR: ESP-IDF Python virtual environment ".../idf6.0_py3.14_env" not found
+```
+
+your default `python3` is **3.14** (Homebrew/pyenv), but `./install.sh` created **`idf6.0_py3.12_env`**. ESP-IDF 6.0.2 does not support 3.14 yet.
+
+**Fix (you already have the 3.12 venv):**
+
+```bash
+export IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf6.0_py3.12_env
+source ~/esp/esp-idf/export.sh
+```
+
+Or use the `get_idf` function from §6. Confirm: `python --version` → **3.12.x**.
+
+Before firmware work, **deactivate** the server venv so it does not shadow tools:
+
+```bash
+deactivate   # if (server) venv is active
+get_idf
+```
 
 ---
 

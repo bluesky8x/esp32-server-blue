@@ -1,6 +1,9 @@
-# Docker安装Server
-
-version: '3'
+# Deprecated — use repo-root docker-compose.yml and ./run-docker.sh instead.
+#
+# Blue stack (build from source):
+#   cd ../.. && ./run-docker.sh up
+#
+# Upstream pre-built image (no Blue customizations):
 services:
   xiaozhi-esp32-server:
     image: ghcr.nju.edu.cn/xinnan-tech/xiaozhi-esp32-server:server_latest
@@ -11,12 +14,8 @@ services:
     environment:
       - TZ=UTC
     ports:
-      # ws服务端
       - "8000:8000"
-      # http服务的端口，用于简单OTA接口(单服务部署)，以及视觉分析接口
       - "8003:8003"
     volumes:
-      # 配置文件目录
       - ./data:/opt/xiaozhi-esp32-server/data
-      # 模型文件挂接，很重要
       - ./models/SenseVoiceSmall/model.pt:/opt/xiaozhi-esp32-server/models/SenseVoiceSmall/model.pt

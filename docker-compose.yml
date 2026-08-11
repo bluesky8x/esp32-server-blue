@@ -1,0 +1,69 @@
+# Blue xiaozhi-server stack for Ubuntu / Linux
+#
+# Server only:
+#   ./run-docker.sh up
+#
+# Server + local Piper TTS (Speaches):
+#   ./run-docker.sh up-tts
+#   ./run-tts.sh setup
+#
+# Edit main/xiaozhi-server/data/.config.yaml before first run:
+#   server.websocket: ws://<ubuntu-lan-ip>:8000/xiaozhi/v1/
+#   server.vision_explain: http://<ubuntu-lan-ip>:8003/mcp/vision/explain
+
+name: esp32-server-blue
+
+services:
+  xiaozhi-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+    image: esp32-server-blue:latest
+    container_name: blue-xiaozhi-server
+    restart: unless-stopped
+    ports:
+      - "${SERVER_WS_PORT:-8000}:8000"
+      - "${SERVER_HTTP_PORT:-8003}:8003"
+    volumes:
+      - ./main/xiaozhi-server/data:/opt/xiaozhi-esp32-server/data
+      - ./main/xiaozhi-server/tmp:/opt/xiaozhi-esp32-server/tmp
+      # Uncomment when selected_module.ASR is FunASR:
+      # - ./main/xiaozhi-server/models/SenseVoiceSmall/model.pt:/opt/xiaozhi-esp32-server/models/SenseVoiceSmall/model.pt
+    environment:
+      TZ: ${TZ:-UTC}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8003/xiaozhi/ota/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - blue
+
+  speaches:
+    profiles: ["tts"]
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    container_name: blue-piper-tts
+    restart: unless-stopped
+    ports:
+      - "${TTS_HOST_PORT:-8881}:8000"
+    volumes:
+      - speaches-hf-cache:/home/ubuntu/.cache/huggingface/hub
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - blue
+
+networks:
+  blue:
+    driver: bridge
+
+volumes:
+  speaches-hf-cache:

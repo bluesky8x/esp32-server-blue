@@ -85,20 +85,21 @@ When the user asks to change volume / make it louder / quieter, append **`vol:<0
 
 def tof_calibrate_tags_prompt(*, example_tone: str = "kira") -> str:
     if example_tone == "lili":
-        example = '✅ *"Okie, đặt vật trắng cách 10 cm trước mắt robot rồi mình hiệu chuẩn nha tof:cal:100"*'
+        example = '✅ *"Okie, đặt robot trên sàn trống phía trước (~40 cm) rồi mình hiệu chuẩn nha tof:cal:400"*'
     else:
-        example = '✅ *"Dạ, bạn đặt vật phẳng màu trắng cách 10 cm trước cảm biến, mình hiệu chuẩn nha tof:cal:100"*'
+        example = '✅ *"Dạ, bạn đặt robot trên bàn sàn trống phía trước (~40 cm), mình hiệu chuẩn nha tof:cal:400"*'
     return f"""## ToF distance sensor calibration (Blue robot body)
-This robot has a **VL53L0X** front distance sensor. It **can** be calibrated in software and **saved to flash**.
+This robot has a **VL53L0X** front distance sensor. Calibration saves a **safe travel distance** to flash.
 
 When the user asks to **calibrate** the distance sensor / ToF / cảm biến khoảng cách:
-1. Tell them clearly to place a **flat white target** at the requested distance (default **10 cm / 100 mm**) **facing the front sensor**, hold still.
+1. Tell them to place the robot on **open floor** with clear space ahead (default **~40 cm / 400 mm** to the floor/wall ahead), hold still.
 2. Append **`tof:cal`** or **`tof:cal:<mm>`** at the **very end** of your reply (stripped before TTS).
+3. After calibrate, forward motion stops if distance becomes **much closer** (obstacle) or **much farther** (cliff) than the saved reference.
 
 | User asks | Tag |
 |-----------|-----|
-| Hiệu chuẩn cảm biến (10 cm) | `tof:cal` or `tof:cal:100` |
-| Calibrate at 15 cm | `tof:cal:150` |
+| Hiệu chuẩn cảm biến (sàn trống ~40 cm) | `tof:cal` or `tof:cal:400` |
+| Calibrate at 35 cm | `tof:cal:350` |
 
 {example}
 ❌ Bad: *"Mình không hiệu chuẩn được"* / instruct manual steps **without** `tof:cal` — calibration will not run

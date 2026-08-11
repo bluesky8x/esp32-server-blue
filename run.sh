@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run xiaozhi-server on Mac (after setup once)
+# Run xiaozhi-server on Mac (after one-time setup — see BLUE.md § macOS install dependencies)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT/main/xiaozhi-server"
@@ -48,7 +48,7 @@ fi
 if [[ -d .venv ]]; then
   source .venv/bin/activate
 else
-  echo "Missing .venv — run: pyenv local 3.10.19 && python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+  echo "Missing .venv — see BLUE.md § macOS install dependencies (pyenv 3.10.19, ffmpeg, opus, pip install -r requirements.txt)"
   exit 1
 fi
 

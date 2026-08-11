@@ -50,7 +50,11 @@ First image build downloads PyTorch and can take several minutes.
 
 ## macOS — install dependencies (local build)
 
-One-time setup on Mac (Apple Silicon or Intel) before `./run.sh`. Blue defaults use **cloud APIs** (Gemini LLM, OpenAI ASR, Edge TTS) — no local GPU or FunASR model required.
+One-time setup on Mac before `./run.sh`. Blue defaults use **cloud APIs** (Gemini LLM, OpenAI ASR, Edge TTS) — no local GPU or FunASR model required.
+
+> **MacBook Pro 2019 (Intel):** use the dedicated guide [docs/macos-intel-build.md](./docs/macos-intel-build.md) — Homebrew paths, pyenv/OpenSSL, USB-C flashing, RAM, and build times for x86_64.
+
+Apple Silicon and other Macs can follow the steps below (same commands; Intel doc covers x86_64 edge cases).
 
 ### What you need
 
@@ -217,13 +221,24 @@ cd esp-idf
 
 First run downloads compilers and tools into `~/.espressif/` (**10–30 minutes**).
 
-Add to `~/.zshrc` (optional — load IDF in new terminals):
+Add to `~/.zshrc`:
 
 ```bash
-alias get_idf='. $HOME/esp/esp-idf/export.sh'
+# Load ESP-IDF — pins the install-time Python 3.12 venv (avoids py3.14 mismatch)
+get_idf() {
+  export IDF_PYTHON_ENV_PATH="$HOME/.espressif/python_env/idf6.0_py3.12_env"
+  . "$HOME/esp/esp-idf/export.sh"
+}
 ```
 
 Then run `get_idf` before any `idf.py` / firmware build command.
+
+> **If `source export.sh` fails with** `idf6.0_py3.14_env not found`: your shell’s default `python3` is **3.14**, but ESP-IDF 6.0.2 was installed with **3.12**. Use `get_idf` above, or run once:
+> ```bash
+> export IDF_PYTHON_ENV_PATH=~/.espressif/python_env/idf6.0_py3.12_env
+> source ~/esp/esp-idf/export.sh
+> ```
+> Do **not** use Python 3.14 with ESP-IDF 6.0.2. Either pin `IDF_PYTHON_ENV_PATH` or run `./install.sh` with pyenv 3.12: `pyenv shell 3.12.11 && ./install.sh esp32s3`
 
 Verify:
 
