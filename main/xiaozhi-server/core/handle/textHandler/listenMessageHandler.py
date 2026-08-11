@@ -34,7 +34,8 @@ class ListenTextMessageHandler(TextMessageHandler):
                 f"客户端拾音模式：{conn.client_listen_mode}"
             )
         if msg_json["state"] == "start":
-            # 设备从播放模式切回录音模式,清除所有音频状态和缓冲区
+            # Device back to listening — ensure ASR accepts uplink (not stuck in speaking).
+            conn.clearSpeakStatus()
             conn.reset_audio_states()
         elif msg_json["state"] == "stop":
             # 收到stop但asr未初始化，跳过处理

@@ -12,10 +12,22 @@ from core.providers.tts.dto.dto import SentenceType
 from core.utils.audioRateController import AudioRateController
 
 TAG = __name__
+# Delay before post-TTS motor/ToF MCP so the device can enter listening first.
+POST_TTS_ACTION_DELAY_SEC = 0.6
 # 音频帧时长（毫秒）
 AUDIO_FRAME_DURATION = 60
 # 预缓冲包数量，直接发送以减少延迟
 PRE_BUFFER_COUNT = 5
+
+
+async def _delayed_flush_post_tts_actions(conn: "ConnectionHandler") -> None:
+    """Let the device finish TTS playback and start listening before motor/ToF MCP."""
+    await asyncio.sleep(POST_TTS_ACTION_DELAY_SEC)
+    ws = getattr(conn, "websocket", None)
+    if ws is None or getattr(ws, "closed", False):
+        return
+    if hasattr(conn, "flush_post_tts_actions"):
+        conn.flush_post_tts_actions()
 
 
 async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text, sentence_id=None):
@@ -325,9 +337,9 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
     # 发送消息到客户端
     await conn.websocket.send(json.dumps(message))
 
-    # Deferred motor / ToF / volume MCP — after tts stop reaches the device.
+    # Deferred motor / ToF / volume MCP — after device has time to enter listening.
     if state == "stop" and hasattr(conn, "flush_post_tts_actions"):
-        conn.flush_post_tts_actions()
+        asyncio.create_task(_delayed_flush_post_tts_actions(conn))
 
 
 async def send_stt_message(conn: "ConnectionHandler", text):

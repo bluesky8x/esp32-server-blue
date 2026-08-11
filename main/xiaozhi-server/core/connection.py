@@ -794,6 +794,9 @@ class ConnectionHandler:
         """Queue device side-effect until TTS stop (motor/ToF/volume must not run over TTS)."""
         if not hasattr(self, "_post_tts_action_queue"):
             self._post_tts_action_queue = []
+        if any(existing_label == label for existing_label, _ in self._post_tts_action_queue):
+            self.logger.bind(tag=TAG).debug(f"[post_tts] skip duplicate {label}")
+            return
         self._post_tts_action_queue.append((label, action))
         self.logger.bind(tag=TAG).debug(f"[post_tts] queued {label}")
 
@@ -802,11 +805,19 @@ class ConnectionHandler:
         self._post_tts_action_queue = []
         if not queue:
             return
-        self.logger.bind(tag=TAG).info(
-            f"[post_tts] flushing {len(queue)} deferred action(s): "
-            f"{[label for label, _ in queue]}"
-        )
+        # Collapse duplicate labels (stream + prepare_llm often queue mv_steps twice).
+        seen_labels: set[str] = set()
+        unique_queue = []
         for label, action in queue:
+            if label in seen_labels:
+                continue
+            seen_labels.add(label)
+            unique_queue.append((label, action))
+        self.logger.bind(tag=TAG).info(
+            f"[post_tts] flushing {len(unique_queue)} deferred action(s): "
+            f"{[label for label, _ in unique_queue]}"
+        )
+        for label, action in unique_queue:
             try:
                 action()
             except Exception as exc:
@@ -1382,6 +1393,8 @@ class ConnectionHandler:
                     f"[mv] failed mv:{format_move_step(mv_step)} → {tool}: {exc}"
                 )
             self._start_robot_move_cooldown(mv_duration if mv_step.code != "s" else None)
+            self.clearSpeakStatus()
+            self.reset_audio_states()
             if (
                 self._robot_move_sequence_queue
                 and not getattr(self, "_robot_move_shutdown", False)
@@ -1422,7 +1435,12 @@ class ConnectionHandler:
 
         if not text:
             return
-        allow_inference = bool(getattr(self, "_user_requested_move", False))
+        if not getattr(self, "_user_requested_move", False):
+            self.logger.bind(tag=TAG).debug(
+                f"[mv] skip ({label}): user move_intent=False this turn"
+            )
+            return
+        allow_inference = True
         steps = extract_move_steps_from_assistant_reply(
             text,
             default_sec=self._robot_move_default_duration(),
