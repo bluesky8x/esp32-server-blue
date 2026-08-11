@@ -45,8 +45,13 @@ class DeviceMCPExecutor(ToolExecutor):
 
             args_str = json.dumps(arguments) if arguments else "{}"
 
+            # motor.stop is idempotent — short timeout (device may already have stopped via ToF)
+            timeout = 5 if tool_name in ("self.motor.stop", "self_motor_stop") else 30
+
             # 调用设备端MCP工具
-            result = await call_mcp_tool(conn, conn.mcp_client, tool_name, args_str)
+            result = await call_mcp_tool(
+                conn, conn.mcp_client, tool_name, args_str, timeout=timeout
+            )
             logger.bind(tag=TAG).info(
                 f"[tool] device_mcp ← {tool_name} raw={str(result)[:200]}"
             )
@@ -80,6 +85,13 @@ class DeviceMCPExecutor(ToolExecutor):
 
         except ValueError as e:
             return ActionResponse(action=Action.NOTFOUND, response=str(e))
+        except TimeoutError:
+            if tool_name in ("self.motor.stop", "self_motor_stop"):
+                logger.bind(tag=TAG).warning(
+                    f"[tool] device_mcp ← {tool_name} timeout — treating as stopped"
+                )
+                return ActionResponse(action=Action.REQLLM, result="true")
+            return ActionResponse(action=Action.ERROR, response="工具调用请求超时")
         except Exception as e:
             return ActionResponse(action=Action.ERROR, response=str(e))
 
