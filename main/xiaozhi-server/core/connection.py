@@ -181,6 +181,7 @@ class ConnectionHandler:
         self._robot_move_cooldown_until = 0.0
         self._robot_motor_active_until = 0.0
         self._robot_mute_mic_active = False
+        self._robot_post_motor_grace_until = 0.0
         self._speech_filter_relax_until = 0.0
         self._robot_move_shutdown = False
         self._robot_move_pump_handle = None
@@ -784,6 +785,7 @@ class ConnectionHandler:
         self._robot_move_pump_scheduled = False
         self._robot_move_cooldown_until = 0.0
         self._robot_motor_active_until = 0.0
+        self._clear_post_motor_listen_grace()
 
         if dispatch_stop:
             self._dispatch_motor_stop_immediate(label=label)
@@ -1107,6 +1109,24 @@ class ConnectionHandler:
             return
         # Small margin for MX1508 brake + MCP ack skew
         self._robot_motor_active_until = time.monotonic() + float(duration_sec) + 0.5
+
+    def _start_post_motor_listen_grace(self) -> None:
+        """Block force-ASR heuristics while motor EMI decays; VAD-only window."""
+        rm = self.config.get("robot_move") or {}
+        grace = float(rm.get("post_motor_listen_grace_sec", 4))
+        self._robot_post_motor_grace_until = time.monotonic() + grace
+        self._asr_rms_loud_frames = 0
+        relax_sec = float(
+            ((self.config.get("speech_filter") or {}).get("motor_relax_sec", 45))
+        )
+        self._speech_filter_relax_until = time.monotonic() + relax_sec
+
+    def _post_motor_listen_grace_active(self) -> bool:
+        return time.monotonic() < getattr(self, "_robot_post_motor_grace_until", 0.0)
+
+    def _clear_post_motor_listen_grace(self) -> None:
+        self._robot_post_motor_grace_until = 0.0
+        self._asr_rms_loud_frames = 0
 
     def _start_robot_move_cooldown(self, step_duration_sec: float | None = None) -> None:
         if step_duration_sec is not None and step_duration_sec > 0:
@@ -1433,10 +1453,15 @@ class ConnectionHandler:
                     f"[mv] failed mv:{format_move_step(mv_step)} → {tool}: {exc}"
                 )
             self._start_robot_move_cooldown(mv_duration if mv_step.code != "s" else None)
+            if mv_step.code == "s":
+                self._clear_post_motor_listen_grace()
+            else:
+                self._start_post_motor_listen_grace()
             relax_sec = float(
                 ((self.config.get("speech_filter") or {}).get("motor_relax_sec", 45))
             )
-            self._speech_filter_relax_until = time.monotonic() + relax_sec
+            if mv_step.code == "s":
+                self._speech_filter_relax_until = time.monotonic() + relax_sec
             self.clearSpeakStatus()
             self.reset_audio_states()
             if (

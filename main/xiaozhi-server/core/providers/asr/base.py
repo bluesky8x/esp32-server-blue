@@ -30,9 +30,14 @@ logger = setup_logging()
 
 # ~9s @ 60ms/frame — force ASR if VAD never sees silence (motor hiss / EMI)
 _MAX_ASR_PCM_FRAMES = 150
-# ~1.5s of loud uplink when VAD misses speech (post-motor INMP441)
-_RMS_FALLBACK_THRESHOLD = 800
-_RMS_FALLBACK_FRAMES = 25
+# Post-motor: only trigger on speech-level RMS (motor ambient ~1.5–2.1k, not 800)
+_RMS_FALLBACK_THRESHOLD = 2400
+_RMS_FALLBACK_FRAMES = 35
+_RMS_FALLBACK_COOLDOWN_SEC = 5.0
+
+
+def _post_motor_grace_active(conn: "ConnectionHandler") -> bool:
+    return conn._post_motor_listen_grace_active()
 
 
 def _pcm_frame_rms(pcm_frame: bytes) -> float:
@@ -90,26 +95,33 @@ class ASRProviderBase(ABC):
 
             # 如果没有语音，且之前也没有声音，缓存部分音频
             if not audio_have_voice and not conn.client_have_voice:
-                rms = _pcm_frame_rms(pcm_frame)
-                loud_frames = getattr(conn, "_asr_rms_loud_frames", 0)
-                if rms >= _RMS_FALLBACK_THRESHOLD:
-                    loud_frames += 1
-                else:
-                    loud_frames = 0
-                conn._asr_rms_loud_frames = loud_frames
-                if loud_frames >= _RMS_FALLBACK_FRAMES:
-                    conn.client_have_voice = True
-                    conn.client_voice_stop = True
-                    conn._asr_rms_loud_frames = 0
-                    logger.bind(tag=TAG).info(
-                        f"Force ASR: RMS fallback rms={rms:.0f} "
-                        "(VAD missed speech after motor/ambient noise)"
-                    )
+                if not _post_motor_grace_active(conn):
+                    rms = _pcm_frame_rms(pcm_frame)
+                    loud_frames = getattr(conn, "_asr_rms_loud_frames", 0)
+                    if rms >= _RMS_FALLBACK_THRESHOLD:
+                        loud_frames += 1
+                    else:
+                        loud_frames = 0
+                    conn._asr_rms_loud_frames = loud_frames
+                    if loud_frames >= _RMS_FALLBACK_FRAMES:
+                        conn.client_have_voice = True
+                        conn.client_voice_stop = True
+                        conn._asr_rms_loud_frames = 0
+                        logger.bind(tag=TAG).info(
+                            f"Force ASR: RMS fallback rms={rms:.0f} "
+                            "(VAD missed speech)"
+                        )
+                    else:
+                        conn.asr_audio = conn.asr_audio[-10:]
+                        return
                 else:
                     conn.asr_audio = conn.asr_audio[-10:]
                     return
 
-            if len(conn.asr_audio) > _MAX_ASR_PCM_FRAMES:
+            if (
+                len(conn.asr_audio) > _MAX_ASR_PCM_FRAMES
+                and not _post_motor_grace_active(conn)
+            ):
                 conn.client_voice_stop = True
                 logger.bind(tag=TAG).info(
                     f"Force ASR: utterance buffer capped at {_MAX_ASR_PCM_FRAMES} frames "
@@ -155,6 +167,11 @@ class ASRProviderBase(ABC):
                 min_rms = float((speech_cfg or {}).get("min_rms", 180))
                 if rms >= min_rms:
                     conn.last_activity_time = time.time() * 1000
+                # Cooldown force-ASR after noise rejection (motor EMI false triggers)
+                conn._robot_post_motor_grace_until = (
+                    time.monotonic() + _RMS_FALLBACK_COOLDOWN_SEC
+                )
+                conn._asr_rms_loud_frames = 0
                 self.stop_ws_connection()
                 return
 

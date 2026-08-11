@@ -68,6 +68,7 @@ def _thresholds(cfg: Mapping[str, Any] | None) -> dict[str, float]:
         "motor_relax_rms_bypass_ratio": float(
             c.get("motor_relax_rms_bypass_ratio", 0.10)
         ),
+        "rms_hard_bypass": float(c.get("rms_hard_bypass", 2000)),
     }
 
 
@@ -123,6 +124,17 @@ def analyze_pcm(
     freqs = np.fft.rfftfreq(len(audio), 1 / _SAMPLE_RATE)
     speech_mask = (freqs >= 300) & (freqs <= 3400)
     speech_ratio = float(np.sum(spectrum[speech_mask]) / (np.sum(spectrum) + 1e-8))
+
+    rms_hard = t.get("rms_hard_bypass", 2000)
+    if rms >= rms_hard:
+        return {
+            "valid": True,
+            "rms": rms,
+            "zcr": zcr,
+            "speech_ratio": speech_ratio,
+            "duration_ms": duration_ms,
+            "bypass": "rms_hard",
+        }
 
     if rms >= t["rms_bypass"] and speech_ratio >= t["rms_bypass_min_ratio"]:
         return {

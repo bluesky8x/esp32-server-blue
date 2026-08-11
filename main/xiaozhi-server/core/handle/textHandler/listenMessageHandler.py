@@ -40,6 +40,7 @@ class ListenTextMessageHandler(TextMessageHandler):
             conn._robot_mute_mic_active = False
             conn._robot_motor_active_until = 0.0
             conn._asr_rms_loud_frames = 0
+            conn._clear_post_motor_listen_grace()
             relax_sec = float(
                 ((conn.config.get("speech_filter") or {}).get("motor_relax_sec", 45))
             )
