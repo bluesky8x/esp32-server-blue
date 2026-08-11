@@ -344,8 +344,10 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
 
 async def send_stt_message(conn: "ConnectionHandler", text):
     """发送 STT 状态消息"""
-    end_prompt_str = conn.config.get("end_prompt", {}).get("prompt")
-    if end_prompt_str and end_prompt_str == text:
+    from core.handle.receiveAudioHandle import resolve_end_prompt
+
+    end_prompt_str = resolve_end_prompt(conn)
+    if end_prompt_str.strip() == (text or "").strip():
         await send_tts_message(conn, "start")
         return
 

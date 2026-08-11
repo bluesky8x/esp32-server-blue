@@ -26,7 +26,8 @@ _CM_RE = re.compile(r"(\d{1,2})\s*cm\b", re.IGNORECASE)
 
 
 def default_calibration_distance_mm() -> int:
-    return 100
+    # Match firmware TOF_CALIBRATION_DISTANCE_MM (flat floor ~400 mm on Otto bench).
+    return 400
 
 
 def clamp_calibration_distance(value: int) -> int:

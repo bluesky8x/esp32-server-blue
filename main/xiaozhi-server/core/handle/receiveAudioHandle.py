@@ -14,6 +14,40 @@ from core.handle.sendAudioHandle import send_stt_message, SentenceType
 
 TAG = __name__
 
+_VI_END_PROMPT = (
+    'Hãy bắt đầu bằng "Thời gian trôi nhanh quá" và nói lời tạm biệt '
+    "thân thiện, ấm áp để kết thúc cuộc trò chuyện."
+)
+_ZH_END_PROMPT = (
+    "请你以```时间过得真快```未来头，用富有感情、依依不舍的话来结束这场对话吧。！"
+)
+
+
+def resolve_end_prompt(conn: "ConnectionHandler") -> str:
+    """Locale-aware goodbye LLM prompt (override legacy Chinese sys_params for vi)."""
+    locale = getattr(conn, "active_locale", None) or "vi"
+    configured = ((conn.config.get("end_prompt") or {}).get("prompt") or "").strip()
+    if locale == "vi":
+        if not configured or "时间过得真快" in configured:
+            return _VI_END_PROMPT
+        return configured
+    if configured:
+        return configured
+    return _ZH_END_PROMPT
+
+
+async def trigger_end_conversation(conn: "ConnectionHandler") -> None:
+    """Idle timeout goodbye — bypass ASR garbage filter (not user speech)."""
+    prompt = resolve_end_prompt(conn)
+    conn.logger.bind(tag=TAG).info(
+        "Idle timeout — end conversation prompt [locale=%s]",
+        getattr(conn, "active_locale", "vi"),
+    )
+    conn.client_abort = False
+    conn.sentence_id = str(uuid.uuid4().hex)
+    await send_stt_message(conn, prompt)
+    conn.executor.submit(conn.chat, prompt)
+
 
 async def handleAudioMessage(conn: "ConnectionHandler", pcm_frame):
     # 当前片段是否有人说话
@@ -41,7 +75,7 @@ async def resume_vad_detection(conn: "ConnectionHandler"):
     conn.just_woken_up = False
 
 
-async def startToChat(conn: "ConnectionHandler", text):
+async def startToChat(conn: "ConnectionHandler", text, *, system_prompt: bool = False):
     # 检查输入是否是JSON格式（包含说话人信息）
     speaker_name = None
     actual_text = text
@@ -129,7 +163,12 @@ async def startToChat(conn: "ConnectionHandler", text):
 
     from core.utils.language_runtime import is_unintelligible_asr, garbage_asr_response
 
-    if is_unintelligible_asr(actual_text):
+    end_prompt_str = (conn.config.get("end_prompt") or {}).get("prompt", "") or ""
+    is_end_prompt = system_prompt or (
+        end_prompt_str.strip() and actual_text.strip() == end_prompt_str.strip()
+    )
+
+    if not is_end_prompt and is_unintelligible_asr(actual_text):
         conn.logger.bind(tag=TAG).info(
             f"Skipping chat — unintelligible ASR: {actual_text!r} "
             f"[locale={getattr(conn, 'active_locale', 'vi')}]"
@@ -182,10 +221,7 @@ async def no_voice_close_connect(conn: "ConnectionHandler", have_voice):
                 conn.logger.bind(tag=TAG).info("结束对话，无需发送结束提示语")
                 await conn.close()
                 return
-            prompt = end_prompt.get("prompt")
-            if not prompt:
-                prompt = "请你以```时间过得真快```未来头，用富有感情、依依不舍的话来结束这场对话吧。！"
-            await startToChat(conn, prompt)
+            await trigger_end_conversation(conn)
 
 
 async def max_out_size(conn: "ConnectionHandler"):

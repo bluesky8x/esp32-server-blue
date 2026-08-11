@@ -273,9 +273,9 @@ system_error_response: "Sorry — I lost that for a second. Could you say it aga
 # 结束语prompt
 end_prompt:
   enable: true # 是否开启结束语
-  # 结束语
+  # 结束语 (LLM prompt — use Vietnamese for Blue V2 vi locale)
   prompt: |
-    请你以"时间过得真快"未来头，用富有感情、依依不舍的话来结束这场对话吧！
+    Hãy bắt đầu bằng "Thời gian trôi nhanh quá" và nói lời tạm biệt thân thiện, ấm áp để kết thúc cuộc trò chuyện.
 
 # 具体处理时选择的模块(The module selected for specific processing)
 selected_module:
