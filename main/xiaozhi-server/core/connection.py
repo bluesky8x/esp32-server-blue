@@ -790,6 +790,28 @@ class ConnectionHandler:
             )
         return cleared
 
+    def _schedule_post_tts_action(self, label: str, action) -> None:
+        """Queue device side-effect until TTS stop (motor/ToF/volume must not run over TTS)."""
+        if not hasattr(self, "_post_tts_action_queue"):
+            self._post_tts_action_queue = []
+        self._post_tts_action_queue.append((label, action))
+        self.logger.bind(tag=TAG).debug(f"[post_tts] queued {label}")
+
+    def flush_post_tts_actions(self) -> None:
+        queue = getattr(self, "_post_tts_action_queue", None) or []
+        self._post_tts_action_queue = []
+        if not queue:
+            return
+        self.logger.bind(tag=TAG).info(
+            f"[post_tts] flushing {len(queue)} deferred action(s): "
+            f"{[label for label, _ in queue]}"
+        )
+        for label, action in queue:
+            try:
+                action()
+            except Exception as exc:
+                self.logger.bind(tag=TAG).error(f"[post_tts] failed {label}: {exc}")
+
     def _dispatch_motor_stop_immediate(self, *, label: str = "") -> None:
         """Send self.motor.stop immediately — bypasses queue and dedupe."""
         from core.utils.robot_move_codec import RobotMoveStep, build_mcp_call
@@ -958,7 +980,7 @@ class ConnectionHandler:
         future.add_done_callback(_on_tof_done)
 
     def _dispatch_tof_from_assistant_text(
-        self, text: str, *, label: str = ""
+        self, text: str, *, label: str = "", defer_post_tts: bool = False
     ) -> bool:
         from core.utils.tof_tag_codec import extract_tof_calibrate_from_assistant_text
 
@@ -967,19 +989,35 @@ class ConnectionHandler:
         distance_mm = extract_tof_calibrate_from_assistant_text(text)
         if distance_mm is None:
             return False
+        if defer_post_tts:
+            self._schedule_post_tts_action(
+                f"tof:{label or 'assistant'}",
+                lambda d=distance_mm, l=label: self._dispatch_tof_calibrate(
+                    d, label=l or "assistant"
+                ),
+            )
+            return True
         self._dispatch_tof_calibrate(distance_mm, label=label or "assistant")
         return True
 
-    def _maybe_dispatch_tof_stt_fallback(self, *, label: str = "") -> None:
+    def _maybe_dispatch_tof_stt_fallback(self, *, label: str = "", defer_post_tts: bool = True) -> None:
         distance_mm = getattr(self, "_user_requested_tof_calibrate", None)
         if distance_mm is None:
             return
         if getattr(self, "_executed_tof_calibrate", None) == ("tof_cal", distance_mm):
             return
+        if defer_post_tts:
+            self._schedule_post_tts_action(
+                f"tof_stt:{label or 'user_stt_fallback'}",
+                lambda d=distance_mm, l=label: self._dispatch_tof_calibrate(
+                    d, label=l or "user_stt_fallback"
+                ),
+            )
+            return
         self._dispatch_tof_calibrate(distance_mm, label=label or "user_stt_fallback")
 
     def _dispatch_vol_from_assistant_text(
-        self, text: str, *, label: str = ""
+        self, text: str, *, label: str = "", defer_post_tts: bool = False
     ) -> bool:
         from core.utils.volume_tag_codec import extract_volume_from_assistant_text
 
@@ -988,14 +1026,32 @@ class ConnectionHandler:
         volume = extract_volume_from_assistant_text(text)
         if volume is None:
             return False
+        if defer_post_tts:
+            self._schedule_post_tts_action(
+                f"vol:{label or 'assistant'}",
+                lambda v=volume, l=label: self._dispatch_set_volume(
+                    v, label=l or "assistant"
+                ),
+            )
+            return True
         self._dispatch_set_volume(volume, label=label or "assistant")
         return True
 
-    def _maybe_dispatch_volume_stt_fallback(self, *, label: str = "") -> None:
+    def _maybe_dispatch_volume_stt_fallback(
+        self, *, label: str = "", defer_post_tts: bool = True
+    ) -> None:
         volume = getattr(self, "_user_requested_volume", None)
         if volume is None:
             return
         if getattr(self, "_last_dispatched_volume", None) == volume:
+            return
+        if defer_post_tts:
+            self._schedule_post_tts_action(
+                f"vol_stt:{label or 'user_stt_fallback'}",
+                lambda v=volume, l=label: self._dispatch_set_volume(
+                    v, label=l or "user_stt_fallback"
+                ),
+            )
             return
         self._dispatch_set_volume(volume, label=label or "user_stt_fallback")
 
@@ -1126,7 +1182,19 @@ class ConnectionHandler:
         )
         self._robot_move_pump_handle = self.loop.call_later(delay_s, _run)
 
-    def _dispatch_robot_move_steps(self, sentence_id: str | None, steps: list) -> None:
+    def _dispatch_robot_move_steps(
+        self, sentence_id: str | None, steps: list, *, defer_post_tts: bool = False
+    ) -> None:
+        if defer_post_tts:
+            if not steps:
+                return
+            self._schedule_post_tts_action(
+                f"mv_steps:{sentence_id}",
+                lambda sid=sentence_id, st=list(steps): self._dispatch_robot_move_steps(
+                    sid, st, defer_post_tts=False
+                ),
+            )
+            return
         if not steps:
             return
 
@@ -1339,7 +1407,12 @@ class ConnectionHandler:
         self._dispatch_robot_move_codes(sentence_id, codes)
 
     def _dispatch_mv_from_assistant_text(
-        self, sentence_id: str | None, text: str, *, label: str = ""
+        self,
+        sentence_id: str | None,
+        text: str,
+        *,
+        label: str = "",
+        defer_post_tts: bool = False,
     ) -> None:
         from core.utils.robot_move_codec import (
             extract_move_codes,
@@ -1363,7 +1436,9 @@ class ConnectionHandler:
             self.logger.bind(tag=TAG).info(
                 f"[mv] inferred ({label}): {tag_repr} «{text[:80]}»"
             )
-        self._dispatch_robot_move_steps(sentence_id, steps)
+        self._dispatch_robot_move_steps(
+            sentence_id, steps, defer_post_tts=defer_post_tts
+        )
 
     def _prepare_llm_text_for_tts(
         self, sentence_id: str | None, text: str, *, trim_edges: bool = False
@@ -1396,10 +1471,10 @@ class ConnectionHandler:
             self, text, label="prepare_llm_text_for_tts"
         )
         self._dispatch_vol_from_assistant_text(
-            text, label="prepare_llm_text_for_tts"
+            text, label="prepare_llm_text_for_tts", defer_post_tts=True
         )
         self._dispatch_tof_from_assistant_text(
-            text, label="prepare_llm_text_for_tts"
+            text, label="prepare_llm_text_for_tts", defer_post_tts=True
         )
         cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
         cleaned = strip_tof_tags(cleaned, trim_edges=trim_edges)
@@ -1408,7 +1483,7 @@ class ConnectionHandler:
         cleaned = strip_char_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_sleep_tag(cleaned, trim_edges=trim_edges)
         self._dispatch_mv_from_assistant_text(
-            sentence_id, text, label="prepare_llm_text_for_tts"
+            sentence_id, text, label="prepare_llm_text_for_tts", defer_post_tts=True
         )
         return cleaned
 
@@ -1481,10 +1556,12 @@ class ConnectionHandler:
             self._move_tag_stream_hold = mv_hold
 
         if steps:
-            self._dispatch_robot_move_steps(sentence_id, steps)
+            self._dispatch_robot_move_steps(
+                sentence_id, steps, defer_post_tts=True
+            )
         elif cleaned and flush_hold:
             self._dispatch_mv_from_assistant_text(
-                sentence_id, cleaned, label="tts_stream_final"
+                sentence_id, cleaned, label="tts_stream_final", defer_post_tts=True
             )
 
         if work:
@@ -1498,8 +1575,12 @@ class ConnectionHandler:
             apply_sleep_tag_from_assistant_text(
                 self, work, label="tts_stream"
             )
-            self._dispatch_vol_from_assistant_text(work, label="tts_stream")
-            self._dispatch_tof_from_assistant_text(work, label="tts_stream")
+            self._dispatch_vol_from_assistant_text(
+                work, label="tts_stream", defer_post_tts=True
+            )
+            self._dispatch_tof_from_assistant_text(
+                work, label="tts_stream", defer_post_tts=True
+            )
         cleaned = strip_tof_tags(cleaned or "", trim_edges=False)
         cleaned = strip_vol_tags(cleaned or "", trim_edges=False)
         cleaned = strip_mem_tags(cleaned or "", trim_edges=False)
@@ -1536,10 +1617,12 @@ class ConnectionHandler:
             max_sec=self._robot_move_max_duration(),
         )
         if steps:
-            self._dispatch_robot_move_steps(sentence_id, steps)
+            self._dispatch_robot_move_steps(
+                sentence_id, steps, defer_post_tts=True
+            )
         elif tts_part:
             self._dispatch_mv_from_assistant_text(
-                sentence_id, tts_part, label="da_tail"
+                sentence_id, tts_part, label="da_tail", defer_post_tts=True
             )
         if tts_part:
             self.tts.tts_text_queue.put(
@@ -2244,13 +2327,16 @@ class ConnectionHandler:
                                     tc["_da_parsed_len"] = len(da_text)
                                     if steps:
                                         self._dispatch_robot_move_steps(
-                                            current_sentence_id, steps
+                                            current_sentence_id,
+                                            steps,
+                                            defer_post_tts=True,
                                         )
                                     elif safe:
                                         self._dispatch_mv_from_assistant_text(
                                             current_sentence_id,
                                             safe,
                                             label="da_stream",
+                                            defer_post_tts=True,
                                         )
                                     if safe:
                                         self.tts.tts_text_queue.put(
@@ -2352,6 +2438,7 @@ class ConnectionHandler:
                                 current_sentence_id,
                                 da_clean,
                                 label="da_full",
+                                defer_post_tts=True,
                             )
                             # 写入对话历史（不含 mv: 控制码）
                             da_response = da_clean

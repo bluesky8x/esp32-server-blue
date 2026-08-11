@@ -325,6 +325,10 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
     # 发送消息到客户端
     await conn.websocket.send(json.dumps(message))
 
+    # Deferred motor / ToF / volume MCP — after tts stop reaches the device.
+    if state == "stop" and hasattr(conn, "flush_post_tts_actions"):
+        conn.flush_post_tts_actions()
+
 
 async def send_stt_message(conn: "ConnectionHandler", text):
     """发送 STT 状态消息"""

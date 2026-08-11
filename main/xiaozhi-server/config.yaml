@@ -843,7 +843,24 @@ VLLM:
     model_name: lite
     api_key: 你的api_password
 TTS:
-  # 当前支持的type为edge、doubao，可自行适配
+  # 当前支持的type为edge、gemini、doubao，可自行适配
+  GeminiTTS:
+    type: gemini
+    # Same API key as GeminiLLM — https://aistudio.google.com/apikey
+    api_key: 你的gemini web key
+    model_name: gemini-2.5-flash-preview-tts
+    voice: Kore
+    # Used when language_runtime sets an Edge voice id (gemini_tts_voice preferred)
+    locale_voices:
+      vi: Kore
+      en: Puck
+    locale_language_codes:
+      vi: vi-VN
+      en: en-US
+    output_dir: tmp/
+    timeout: 30
+    http_proxy: ""
+    https_proxy: ""
   EdgeTTS:
     # 定义TTS API类型
     type: edge
