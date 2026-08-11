@@ -50,6 +50,17 @@ async def trigger_end_conversation(conn: "ConnectionHandler") -> None:
 
 
 async def handleAudioMessage(conn: "ConnectionHandler", pcm_frame):
+    # Ignore uplink ASR/VAD while robot motors are running (INMP441 + EMI).
+    if conn._robot_move_mute_mic_enabled() and conn._robot_motor_mic_busy():
+        if not getattr(conn, "_robot_mute_mic_active", False):
+            conn._robot_mute_mic_active = True
+            conn.reset_audio_states()
+            conn.logger.bind(tag=TAG).debug("[mv] muting mic uplink while motor active")
+        await no_voice_close_connect(conn, False)
+        return
+    if getattr(conn, "_robot_mute_mic_active", False):
+        conn._robot_mute_mic_active = False
+
     # 当前片段是否有人说话
     have_voice = conn.vad.is_vad(conn, pcm_frame)
     # 如果设备刚刚被唤醒，短暂忽略VAD检测

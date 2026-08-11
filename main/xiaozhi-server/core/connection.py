@@ -178,6 +178,8 @@ class ConnectionHandler:
         self._robot_move_in_flight = False
         self._robot_move_pump_scheduled = False
         self._robot_move_cooldown_until = 0.0
+        self._robot_motor_active_until = 0.0
+        self._robot_mute_mic_active = False
         self._speech_filter_relax_until = 0.0
         self._robot_move_shutdown = False
         self._robot_move_pump_handle = None
@@ -759,6 +761,7 @@ class ConnectionHandler:
         self._pending_robot_moves.clear()
         self._robot_move_pump_scheduled = False
         self._robot_move_in_flight = False
+        self._robot_motor_active_until = 0.0
 
     def emergency_stop_robot_moves(
         self, *, label: str = "", dispatch_stop: bool = True
@@ -779,6 +782,7 @@ class ConnectionHandler:
         self._pending_robot_moves.clear()
         self._robot_move_pump_scheduled = False
         self._robot_move_cooldown_until = 0.0
+        self._robot_motor_active_until = 0.0
 
         if dispatch_stop:
             self._dispatch_motor_stop_immediate(label=label)
@@ -1069,6 +1073,26 @@ class ConnectionHandler:
 
     def _robot_move_cooldown_remaining(self) -> float:
         return max(0.0, getattr(self, "_robot_move_cooldown_until", 0.0) - time.monotonic())
+
+    def _robot_move_mute_mic_enabled(self) -> bool:
+        rm = self.config.get("robot_move")
+        if isinstance(rm, dict):
+            return bool(rm.get("mute_mic", True))
+        return bool(self.config.get("robot_move_mute_mic", True))
+
+    def _robot_motor_mic_busy(self) -> bool:
+        """True while a move MCP is in flight or the device motor window is active."""
+        if getattr(self, "_robot_move_in_flight", False):
+            return True
+        until = getattr(self, "_robot_motor_active_until", 0.0)
+        return time.monotonic() < until
+
+    def _mark_robot_motor_active(self, duration_sec: int, code: str) -> None:
+        if code == "s" or duration_sec <= 0:
+            self._robot_motor_active_until = 0.0
+            return
+        # Small margin for MX1508 brake + MCP ack skew
+        self._robot_motor_active_until = time.monotonic() + float(duration_sec) + 0.5
 
     def _start_robot_move_cooldown(self, step_duration_sec: float | None = None) -> None:
         if step_duration_sec is not None and step_duration_sec > 0:
@@ -1369,6 +1393,7 @@ class ConnectionHandler:
 
         self._executed_robot_moves.add(dedupe_key)
         self._robot_move_in_flight = True
+        self._mark_robot_motor_active(duration_sec, code)
         args_json = json.dumps(tool_args, ensure_ascii=False)
         self.logger.bind(tag=TAG).info(
             f"[mv] dispatch mv:{format_move_step(step)} → {tool_name} "
