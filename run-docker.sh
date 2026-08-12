@@ -50,18 +50,8 @@ case "$cmd" in
     [[ -n "$ip" ]] && echo "OTA test:  curl http://${ip}:8003/xiaozhi/ota/"
     echo "Logs:      $0 logs"
     ;;
-  up-tts)
-    ensure_config
-    compose --profile tts up -d --build
-    ip="$(lan_ip_hint)"
-    echo ""
-    echo "Server + Speaches TTS started."
-    [[ -n "$ip" ]] && echo "OTA test:  curl http://${ip}:8003/xiaozhi/ota/"
-    echo "TTS test:  ./run-tts.sh setup && ./run-tts.sh test"
-    echo "In data/.config.yaml use CustomTTS url: http://speaches:8000/v1/audio/speech"
-    ;;
   down)
-    compose --profile tts down
+    compose down
     ;;
   restart)
     compose restart xiaozhi-server
@@ -80,11 +70,15 @@ case "$cmd" in
     ;;
   help|*)
     cat <<EOF
-Usage: $0 {up|up-tts|down|restart|logs|ps|build|shell}
+Usage: $0 {up|down|restart|logs|ps|build|shell}
 
   up       Build and start xiaozhi-server (ports 8000, 8003)
-  up-tts   Also start local Piper TTS (Speaches on port \${TTS_HOST_PORT:-8881})
-  down     Stop all compose services
+  down     Stop server container
+
+Local TTS runs separately:
+  ./run-vieneu-tts.sh up   # VieNeu on \${VIENEU_TTS_PORT:-8882}
+  ./run-tts.sh setup       # Piper on \${TTS_HOST_PORT:-8881}
+  Point data/.config.yaml CustomTTS url at 127.0.0.1 or host.docker.internal
   restart  Restart xiaozhi-server
   logs     Follow server logs
   ps       Show container status

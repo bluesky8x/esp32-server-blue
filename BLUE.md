@@ -35,14 +35,18 @@ Verify OTA from another machine on the LAN:
 curl http://<ubuntu-lan-ip>:8003/xiaozhi/ota/
 ```
 
-Optional local Piper TTS (lower latency than Edge TTS):
+Optional local TTS (separate Docker stack — configure url in `data/.config.yaml`):
 
 ```bash
-./run-docker.sh up-tts
+# VieNeu v3 Turbo (better Vietnamese, CPU/ONNX):
+./run-vieneu-tts.sh up
+./run-vieneu-tts.sh test
+
+# Piper (vi/en, fast setup):
 ./run-tts.sh setup
-# In data/.config.yaml: selected_module.TTS: CustomTTS
-# url: http://speaches:8000/v1/audio/speech  (Docker network name)
 ```
+
+See [Local TTS](#local-tts-separate-docker-stack) for `data/.config.yaml` snippets.
 
 Point ESP32 OTA / WiFi config at `http://<ubuntu-lan-ip>:8003/xiaozhi/ota/`.
 
@@ -452,11 +456,26 @@ User speech → ASR → LLM (Kira) → reply + mv:* tags
 
 Implementation: `core/connection.py`, `core/utils/robot_move_codec.py`, `core/characters/kira.py`.
 
-## Local TTS (Piper / Speaches — low latency)
+## Local TTS (separate Docker stack)
 
-Run Piper voices **on your Mac** via [Speaches](https://speaches.ai/) Docker (OpenAI-compatible API). No Edge TTS cloud hop → typically **~0.3–1 s** synthesis from Vietnam.
+TTS runs in its own Compose project (`docker/tts/docker-compose.yml`), independent of xiaozhi-server. Start TTS first, then point the server at the host port via `CustomTTS` in `data/.config.yaml`.
 
-### 1. Start TTS container + download models
+| Engine | Script | Port | Use case |
+|--------|--------|------|----------|
+| VieNeu v3 Turbo | `./run-vieneu-tts.sh up` | 8882 | Best Vietnamese quality (CPU/ONNX) |
+| Piper / Speaches | `./run-tts.sh setup` | 8881 | Fast vi/en, smaller download |
+
+Optional env: `cp docker/tts/.env.example docker/tts/.env`
+
+**Server on host** (`./run.sh`): use `http://127.0.0.1:<port>/v1/audio/speech`
+
+**Server in Docker** (`./run-docker.sh up`): use `http://host.docker.internal:<port>/v1/audio/speech`
+
+### Piper / Speaches (low latency)
+
+Run Piper voices via [Speaches](https://speaches.ai/) Docker (OpenAI-compatible API). No Edge TTS cloud hop → typically **~0.3–1 s** synthesis from Vietnam.
+
+#### 1. Start TTS container + download models
 
 From repo root:
 
@@ -473,7 +492,7 @@ chmod +x run-tts.sh
 
 Override with env: `TTS_VI_MODEL`, `TTS_EN_MODEL`, `TTS_HOST_PORT` (default `8881`).
 
-### 2. Point xiaozhi-server at local TTS
+#### 2. Point xiaozhi-server at local TTS
 
 In `main/xiaozhi-server/data/.config.yaml`:
 
@@ -509,15 +528,55 @@ TTS:
 
 `language_runtime` sets `{model}` per locale; `{voice}` is usually `default` for single-speaker Piper models.
 
-### 3. Restart server
+#### 3. Restart server
 
 ```bash
 ./run.sh
 ```
 
-### Optional: VieNeu (higher quality, GPU)
+### VieNeu-TTS (higher quality Vietnamese)
 
-For NVIDIA GPU hosts, VieNeu-TTS v2 Docker (`pnnbao/vieneu-tts`) gives better Vietnamese quality but needs CUDA. Not required for Mac CPU — use Piper above. See [VieNeu-TTS](https://github.com/pnnbao-ump/VieNeu-TTS).
+[VieNeu-TTS v3 Turbo](https://github.com/xuanhieu/vieneu-tts) runs **on CPU via ONNX** (no GPU required). Better Vietnamese prosody than Piper; first start downloads models (~few GB).
+
+```bash
+chmod +x run-vieneu-tts.sh
+./run-vieneu-tts.sh up      # build + start on :8882 (may take several minutes first time)
+./run-vieneu-tts.sh test    # → /tmp/blue-vieneu-vi.wav
+./run-vieneu-tts.sh voices  # list preset voices (Phạm Tuyên, Minh Đức, …)
+```
+
+In `main/xiaozhi-server/data/.config.yaml`:
+
+```yaml
+selected_module:
+  TTS: CustomTTS
+
+language_runtime:
+  default_locale: vi
+  locales:
+    vi:
+      tts_voice: vieneu-v3-turbo
+      tts_speeches_voice: Phạm Tuyên
+
+TTS:
+  CustomTTS:
+    type: custom
+    method: POST
+    url: "http://127.0.0.1:8882/v1/audio/speech"
+    default_voice: Phạm Tuyên
+    format: wav
+    output_dir: tmp/
+    params:
+      input: "{prompt_text}"
+      model: "{model}"
+      voice: "{voice}"
+      response_format: "wav"
+      speed: 1.0
+```
+
+Override port/voice via `docker/tts/.env`: `VIENEU_TTS_PORT`, `VIENEU_DEFAULT_VOICE`.
+
+For NVIDIA GPU hosts, upstream also supports LMDeploy v2 server (`pnnbao/vieneu-tts:serve`) — see [VieNeu-TTS](https://github.com/xuanhieu/vieneu-tts).
 
 ## Digital human (browser)
 

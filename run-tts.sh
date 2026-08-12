@@ -3,16 +3,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE_FILE="$ROOT/docker-compose.yml"
-LEGACY_COMPOSE="$ROOT/main/xiaozhi-server/docker/tts/docker-compose.yml"
-ENV_FILE="$ROOT/docker/.env"
+COMPOSE_FILE="$ROOT/docker/tts/docker-compose.yml"
+ENV_FILE="$ROOT/docker/tts/.env"
 
-if [[ -f "$COMPOSE_FILE" ]]; then
-  COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile tts)
-  [[ -f "$ENV_FILE" ]] && COMPOSE+=(--env-file "$ENV_FILE")
-else
-  COMPOSE=(docker compose -f "$LEGACY_COMPOSE")
-fi
+COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile piper)
+[[ -f "$ENV_FILE" ]] && COMPOSE+=(--env-file "$ENV_FILE")
 PORT="${TTS_HOST_PORT:-8881}"
 BASE="http://127.0.0.1:${PORT}"
 
@@ -91,7 +86,8 @@ Usage: $0 {up|down|setup|test|logs}
 
 Configure xiaozhi-server data/.config.yaml:
   selected_module.TTS: CustomTTS
-  See data/.config.yaml.example section "Local Piper TTS (Speaches)"
+  TTS.CustomTTS.url: "http://127.0.0.1:$PORT/v1/audio/speech"
+  # server in Docker: http://host.docker.internal:$PORT/v1/audio/speech
 EOF
     ;;
 esac

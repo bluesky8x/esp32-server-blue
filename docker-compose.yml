@@ -3,9 +3,9 @@
 # Server only:
 #   ./run-docker.sh up
 #
-# Server + local Piper TTS (Speaches):
-#   ./run-docker.sh up-tts
-#   ./run-tts.sh setup
+# Local TTS runs in a separate stack (configure url in data/.config.yaml):
+#   ./run-vieneu-tts.sh up    # VieNeu on :8882
+#   ./run-tts.sh setup        # Piper on :8881
 #
 # Edit main/xiaozhi-server/data/.config.yaml before first run:
 #   server.websocket: ws://<ubuntu-lan-ip>:8000/xiaozhi/v1/
@@ -34,6 +34,8 @@ services:
       # - ./main/xiaozhi-server/models/SenseVoiceSmall/model.pt:/opt/xiaozhi-esp32-server/models/SenseVoiceSmall/model.pt
     environment:
       TZ: ${TZ:-UTC}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8003/xiaozhi/ota/"]
       interval: 30s
@@ -43,27 +45,6 @@ services:
     networks:
       - blue
 
-  speaches:
-    profiles: ["tts"]
-    image: ghcr.io/speaches-ai/speaches:latest-cpu
-    container_name: blue-piper-tts
-    restart: unless-stopped
-    ports:
-      - "${TTS_HOST_PORT:-8881}:8000"
-    volumes:
-      - speaches-hf-cache:/home/ubuntu/.cache/huggingface/hub
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-    networks:
-      - blue
-
 networks:
   blue:
     driver: bridge
-
-volumes:
-  speaches-hf-cache:
