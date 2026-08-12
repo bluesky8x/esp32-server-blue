@@ -44,6 +44,13 @@ class ListenTextMessageHandler(TextMessageHandler):
                 conn.logger.bind(tag=TAG).debug(
                     f"listen start debounced ({now - last:.2f}s since last)"
                 )
+                # Still recover if speaking gate stuck after greeting/TTS.
+                if conn.client_is_speaking or getattr(conn, "_playback_greeting", False):
+                    conn.clearSpeakStatus()
+                    if getattr(conn, "_playback_greeting", False):
+                        from core.utils.wake_greeting import _finish_greeting_playback
+
+                        _finish_greeting_playback(conn)
                 return
 
             conn._last_listen_start_at = now

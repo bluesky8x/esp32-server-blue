@@ -325,15 +325,23 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
         # 等待所有音频包发送完成
         await _wait_for_audio_completion(conn)
 
-        # 检查是否是当前轮次
+        # Always release speaking/greeting gate so mic uplink is accepted again.
+        if getattr(conn, "_playback_greeting", False):
+            from core.utils.wake_greeting import _finish_greeting_playback
+
+            _finish_greeting_playback(conn)
+        else:
+            conn.clearSpeakStatus()
+            conn.reset_audio_states()
+
+        # 检查是否是当前轮次（仅影响流控器停止，不影响上面的状态清理）
         if current_sentence_id != conn.sentence_id:
+            await conn.websocket.send(json.dumps(message))
             return
 
         # 停止音频发送循环（仅在流控器已初始化时调用）
         if hasattr(conn, "audio_rate_controller") and conn.audio_rate_controller:
             conn.audio_rate_controller.stop_sending()
-        conn.clearSpeakStatus()
-        conn.reset_audio_states()
 
     # 发送消息到客户端
     await conn.websocket.send(json.dumps(message))
