@@ -44,6 +44,8 @@ def _rms_fallback_settings(conn: "ConnectionHandler") -> tuple[float, int, int]:
     threshold = float(sf.get("rms_fallback_threshold", 2400))
     frames = int(sf.get("rms_fallback_frames", 35))
     keep = int(sf.get("rms_fallback_buffer_frames", 150))
+    if threshold <= 0:
+        threshold = float("inf")
     return threshold, frames, keep
 
 
@@ -137,6 +139,20 @@ class ASRProviderBase(ABC):
 
             # 自动模式下通过VAD检测到语音停止时触发识别
             if conn.asr.interface_type != InterfaceType.STREAM and conn.client_voice_stop:
+                speech_ms = time.time() * 1000 - getattr(
+                    conn, "vad_speech_start_time", 0
+                )
+                min_speech_ms = float(
+                    (conn.config.get("speech_filter") or {}).get(
+                        "min_speech_ms_for_asr", 550
+                    )
+                )
+                if speech_ms < min_speech_ms:
+                    logger.bind(tag=TAG).info(
+                        f"Ignoring short VAD burst ({speech_ms:.0f}ms < {min_speech_ms:.0f}ms) — likely tap/noise"
+                    )
+                    conn.reset_audio_states()
+                    return
                 # 直接使用asr_audio中的PCM数据
                 pcm_bytes = b"".join(conn.asr_audio)
                 # 检查是否有足够的音频数据（每帧1920字节，10帧约19200字节）
@@ -255,6 +271,12 @@ class ASRProviderBase(ABC):
                 return
 
             if text_len > 0:
+                if getattr(conn, "_chat_active", False):
+                    logger.bind(tag=TAG).info(
+                        f"Skipping ASR → chat — turn in progress: "
+                        f"{content_for_length_check[:80]!r}"
+                    )
+                    return
                 audio_snapshot = asr_audio_task.copy()
                 enqueue_asr_report(conn, enhanced_text, audio_snapshot)
                 # 使用自定义模块进行上报

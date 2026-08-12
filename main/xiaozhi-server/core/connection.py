@@ -114,6 +114,7 @@ class ConnectionHandler:
         # 客户端状态相关
         self.client_abort = False
         self.client_is_speaking = False
+        self._chat_active = False
         self.client_listen_mode = "auto"
         self.client_aec = False  # 是否启用了服务端AEC
 
@@ -2273,6 +2274,13 @@ class ConnectionHandler:
 
         # 为最顶层时新建会话ID和发送FIRST请求
         if depth == 0:
+            if getattr(self, "_chat_active", False):
+                self.logger.bind(tag=TAG).warning(
+                    f"Chat already active — skipping duplicate turn: {query!r}"
+                )
+                return None
+            self._chat_active = True
+            self.client_abort = False
             if query and get_active_character(self):
                 self._refresh_character_memory_prompt(query)
             current_sentence_id = str(uuid.uuid4().hex)
@@ -2371,6 +2379,8 @@ class ConnectionHandler:
                 )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
+            if depth == 0:
+                self._chat_active = False
             return None
 
         # 处理流式响应
@@ -2484,6 +2494,7 @@ class ConnectionHandler:
                         content_type=ContentType.ACTION,
                     )
                 )
+                self._chat_active = False
             return
         # 处理function call
         if tool_call_flag:
@@ -2558,6 +2569,7 @@ class ConnectionHandler:
                                     content_type=ContentType.ACTION,
                                 )
                             )
+                            self._chat_active = False
                         return
 
                     tool_calls_list = real_tool_calls
@@ -2683,6 +2695,19 @@ class ConnectionHandler:
                     self.dialogue.get_llm_dialogue(), indent=4, ensure_ascii=False
                 )
             )
+            assistant_reply = "".join(response_message).strip()
+            if not assistant_reply:
+                for msg in reversed(getattr(self.dialogue, "dialogue", [])):
+                    if getattr(msg, "role", None) == "assistant" and getattr(
+                        msg, "content", ""
+                    ).strip():
+                        assistant_reply = msg.content.strip()
+                        break
+            if not assistant_reply:
+                self.logger.bind(tag=TAG).warning(
+                    f"LLM returned empty response for: {query!r}"
+                )
+            self._chat_active = False
 
         return True
 

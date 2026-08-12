@@ -120,10 +120,10 @@ def pick_wake_greeting(conn: "ConnectionHandler", character_id: str) -> str:
 
 
 def _greeting_tts_text(text: str) -> str:
-    """One spoken phrase — strip !/? so TTS does not split mid-greeting."""
-    for ch in "!?;":
-        text = text.replace(ch, ",")
-    return text.strip(" ,")
+    """One spoken phrase — strip punctuation so TTS does not split mid-greeting."""
+    for ch in "!?;,":
+        text = text.replace(ch, " ")
+    return " ".join(text.split())
 
 
 def _begin_greeting_tts(conn: "ConnectionHandler") -> None:

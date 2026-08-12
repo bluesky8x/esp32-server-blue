@@ -142,8 +142,18 @@ async def startToChat(conn: "ConnectionHandler", text, *, system_prompt: bool = 
     char_id, wake_only, _remainder = match_character_wake(actual_text, conn.config)
     is_character_wake = char_id is not None
 
-    if conn.client_is_speaking and conn.client_listen_mode != "manual":
+    if (
+        conn.client_is_speaking
+        and conn.client_listen_mode != "manual"
+        and not getattr(conn, "_chat_active", False)
+    ):
         await handleAbortMessage(conn)
+
+    if getattr(conn, "_chat_active", False):
+        conn.logger.bind(tag=TAG).info(
+            f"Skipping duplicate chat — turn in progress: {actual_text[:80]!r}"
+        )
+        return
 
     # 角色唤醒：先切换再打招呼（并清除 abort，否则 TTS 被跳过）
     if is_character_wake:

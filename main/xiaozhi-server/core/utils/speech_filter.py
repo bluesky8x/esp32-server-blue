@@ -58,6 +58,8 @@ def _thresholds(config: Optional[Mapping[str, Any]] = None) -> dict[str, float]:
         ),
         "max_zcr": float(sf.get("max_zcr", _MAX_ZCR)),
         "rms_hard_bypass": float(sf.get("rms_hard_bypass", 0)),
+        "max_impulse_crest": float(sf.get("max_impulse_crest", 10.0)),
+        "min_speech_ms_for_asr": float(sf.get("min_speech_ms_for_asr", 550)),
     }
 
 
@@ -75,6 +77,22 @@ def analyze_pcm(
 
     duration_ms = len(audio) / _SAMPLE_RATE * 1000
     rms = float(np.sqrt(np.mean(audio**2)))
+    peak = float(np.max(np.abs(audio)))
+    crest = peak / (rms + 1e-8)
+
+    if (
+        duration_ms < 900
+        and crest >= thresholds["max_impulse_crest"]
+        and rms < thresholds["rms_hard_bypass"]
+    ):
+        return {
+            "valid": False,
+            "reason": "impulse_click",
+            "rms": rms,
+            "crest": crest,
+            "duration_ms": duration_ms,
+        }
+
     if rms < thresholds["min_rms"]:
         return {"valid": False, "reason": "too_quiet", "rms": rms, "duration_ms": duration_ms}
 
