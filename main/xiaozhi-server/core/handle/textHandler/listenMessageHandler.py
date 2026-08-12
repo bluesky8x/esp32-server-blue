@@ -20,6 +20,10 @@ from core.providers.tts.dto.dto import ContentType, TTSMessageDTO, SentenceType
 
 TAG = __name__
 
+# Ignore duplicate listen/start from firmware resync (TTS stop, motor, playback drain).
+LISTEN_START_DEBOUNCE_SEC = 2.0
+
+
 class ListenTextMessageHandler(TextMessageHandler):
     """Listen消息处理器"""
 
@@ -34,6 +38,15 @@ class ListenTextMessageHandler(TextMessageHandler):
                 f"客户端拾音模式：{conn.client_listen_mode}"
             )
         if msg_json["state"] == "start":
+            now = time.time()
+            last = getattr(conn, "_last_listen_start_at", 0.0)
+            if last and (now - last) < LISTEN_START_DEBOUNCE_SEC:
+                conn.logger.bind(tag=TAG).debug(
+                    f"listen start debounced ({now - last:.2f}s since last)"
+                )
+                return
+
+            conn._last_listen_start_at = now
             # Device back to listening — ensure ASR accepts uplink (not stuck in speaking).
             conn.clearSpeakStatus()
             conn.reset_audio_states()
