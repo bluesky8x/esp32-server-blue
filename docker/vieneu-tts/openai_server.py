@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from vieneu import Vieneu
 
 SAMPLE_RATE = 48_000
-DEFAULT_VOICE = os.environ.get("VIENEU_DEFAULT_VOICE", "Phạm Tuyên")
+DEFAULT_VOICE = os.environ.get("VIENEU_DEFAULT_VOICE", "Ngọc Lan")
 HOST = os.environ.get("VIENEU_HOST", "0.0.0.0")
 PORT = int(os.environ.get("VIENEU_PORT", "8882"))
 

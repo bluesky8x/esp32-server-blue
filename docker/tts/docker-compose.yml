@@ -35,7 +35,7 @@ services:
       context: ../vieneu-tts
       dockerfile: Dockerfile
       args:
-        VIENEU_REPO: ${VIENEU_REPO:-https://github.com/xuanhieu/vieneu-tts.git}
+        VIENEU_REPO: ${VIENEU_REPO:-https://github.com/pnnbao97/VieNeu-TTS.git}
         VIENEU_REF: ${VIENEU_REF:-main}
     image: blue-vieneu-tts:latest
     container_name: blue-vieneu-tts
@@ -45,7 +45,7 @@ services:
     volumes:
       - vieneu-hf-cache:/root/.cache/huggingface
     environment:
-      VIENEU_DEFAULT_VOICE: ${VIENEU_DEFAULT_VOICE:-Phạm Tuyên}
+      VIENEU_DEFAULT_VOICE: ${VIENEU_DEFAULT_VOICE:-Ngọc Lan}
       HF_HOME: /root/.cache/huggingface
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8882/health"]

@@ -1,6 +1,6 @@
 # VieNeu-TTS v3 Turbo (CPU/ONNX) — OpenAI-compatible API for esp32-server-blue
 #
-# Source: https://github.com/xuanhieu/vieneu-tts
+# Source: https://github.com/pnnbao97/VieNeu-TTS
 FROM python:3.12-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -19,7 +19,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /opt/vieneu-tts
 
-ARG VIENEU_REPO=https://github.com/xuanhieu/vieneu-tts.git
+ARG VIENEU_REPO=https://github.com/pnnbao97/VieNeu-TTS.git
 ARG VIENEU_REF=main
 RUN git clone --depth 1 --branch "${VIENEU_REF}" "${VIENEU_REPO}" .
 

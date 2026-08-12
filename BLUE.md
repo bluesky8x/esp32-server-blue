@@ -536,13 +536,13 @@ TTS:
 
 ### VieNeu-TTS (higher quality Vietnamese)
 
-[VieNeu-TTS v3 Turbo](https://github.com/xuanhieu/vieneu-tts) runs **on CPU via ONNX** (no GPU required). Better Vietnamese prosody than Piper; first start downloads models (~few GB).
+[VieNeu-TTS v3 Turbo](https://github.com/pnnbao97/VieNeu-TTS) runs **on CPU via ONNX** (no GPU required). Better Vietnamese prosody than Piper; first start downloads models (~few GB).
 
 ```bash
 chmod +x run-vieneu-tts.sh
 ./run-vieneu-tts.sh up      # build + start on :8882 (may take several minutes first time)
 ./run-vieneu-tts.sh test    # → /tmp/blue-vieneu-vi.wav
-./run-vieneu-tts.sh voices  # list preset voices (Phạm Tuyên, Minh Đức, …)
+./run-vieneu-tts.sh voices  # list preset voices (Ngọc Lan, Ngọc Linh, Trúc Ly, Mỹ Duyên, …)
 ```
 
 In `main/xiaozhi-server/data/.config.yaml`:
@@ -556,14 +556,14 @@ language_runtime:
   locales:
     vi:
       tts_voice: vieneu-v3-turbo
-      tts_speeches_voice: Phạm Tuyên
+      tts_speeches_voice: Ngọc Lan
 
 TTS:
   CustomTTS:
     type: custom
     method: POST
     url: "http://127.0.0.1:8882/v1/audio/speech"
-    default_voice: Phạm Tuyên
+    default_voice: Ngọc Lan
     format: wav
     output_dir: tmp/
     params:
@@ -576,7 +576,7 @@ TTS:
 
 Override port/voice via `docker/tts/.env`: `VIENEU_TTS_PORT`, `VIENEU_DEFAULT_VOICE`.
 
-For NVIDIA GPU hosts, upstream also supports LMDeploy v2 server (`pnnbao/vieneu-tts:serve`) — see [VieNeu-TTS](https://github.com/xuanhieu/vieneu-tts).
+For NVIDIA GPU hosts, upstream also supports LMDeploy v2 server (`pnnbao/vieneu-tts:serve`) — see [VieNeu-TTS](https://github.com/pnnbao97/VieNeu-TTS).
 
 ## Digital human (browser)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local VieNeu-TTS (xuanhieu/vieneu-tts) for esp32-server-blue — Vietnamese v3 Turbo CPU/ONNX.
+# Local VieNeu-TTS (pnnbao97/VieNeu-TTS) for esp32-server-blue — v3 Turbo CPU/ONNX.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -11,7 +11,7 @@ COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile vieneu)
 
 PORT="${VIENEU_TTS_PORT:-8882}"
 BASE="http://127.0.0.1:${PORT}"
-DEFAULT_VOICE="${VIENEU_DEFAULT_VOICE:-Phạm Tuyên}"
+DEFAULT_VOICE="${VIENEU_DEFAULT_VOICE:-Ngọc Lan}"
 
 cmd="${1:-help}"
 
