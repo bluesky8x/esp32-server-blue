@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from core.connection import ConnectionHandler
 
 _MAX_RECENT = 10
+# Device sends listen/start first (touch → mic on); greet only after this settle time.
+STARTUP_GREETING_DELAY_SEC = 0.6
 
 # Kira — Vietnamese (character voice, warm, concise)
 _KIRA_VI: tuple[str, ...] = (
@@ -41,7 +43,7 @@ _KIRA_EN: tuple[str, ...] = (
     "Hi! I'm here — go ahead, I'm listening.",
     "Hello! Nice to see you. What should we do first?",
     "Hey there! Ready for a quick chat?",
-    "Hi! Kira here. What’s on your mind?",
+    "Hi! Kira here. What's on your mind?",
     "Hello! I'm all ears — what do you need?",
     "Hey! Good to have you back. What's the plan?",
 )
@@ -117,38 +119,37 @@ def pick_wake_greeting(conn: "ConnectionHandler", character_id: str) -> str:
     return choice
 
 
-def arm_greeting_playback(conn: "ConnectionHandler") -> None:
-    """Mute uplink on device (speaking) and server during startup greeting."""
+def _greeting_tts_text(text: str) -> str:
+    """One spoken phrase — strip !/? so TTS does not split mid-greeting."""
+    for ch in "!?;":
+        text = text.replace(ch, ",")
+    return text.strip(" ,")
+
+
+def _begin_greeting_tts(conn: "ConnectionHandler") -> None:
+    """Standard tts start — only after device is already in listening (touch flow)."""
     conn.client_abort = False
-    conn.reset_audio_states()
     conn.client_is_speaking = True
-    conn._playback_greeting = True
     loop = getattr(conn, "loop", None)
-    if loop is not None:
-        from core.handle.sendAudioHandle import send_tts_message
+    if loop is None:
+        return
+    from core.handle.sendAudioHandle import send_tts_message
 
-        future = asyncio.run_coroutine_threadsafe(send_tts_message(conn, "start"), loop)
-        try:
-            future.result(timeout=3)
-        except Exception as exc:
-            logger = getattr(conn, "logger", None)
-            if logger:
-                logger.bind(tag="wake_greeting").warning(
-                    f"Greeting tts start failed: {exc}"
-                )
-
-
-def _finish_greeting_playback(conn: "ConnectionHandler") -> None:
-    conn._playback_greeting = False
-    conn.client_is_speaking = False
-    conn.reset_audio_states()
+    future = asyncio.run_coroutine_threadsafe(send_tts_message(conn, "start"), loop)
+    try:
+        future.result(timeout=3)
+    except Exception as exc:
+        logger = getattr(conn, "logger", None)
+        if logger:
+            logger.bind(tag="wake_greeting").warning(f"Greeting tts start failed: {exc}")
 
 
 def speak_greeting_txt(conn: "ConnectionHandler", text: str) -> None:
-    """Queue greeting as one TTS chunk (avoid !/? split delays)."""
+    """Queue greeting as one TTS chunk."""
     from core.utils.dialogue import Message
     from core.providers.tts.dto.dto import ContentType, SentenceType, TTSMessageDTO
 
+    spoken = _greeting_tts_text(text)
     conn.tts.store_tts_text(conn.sentence_id, text)
     conn.tts.tts_text_queue.put(
         TTSMessageDTO(
@@ -162,7 +163,7 @@ def speak_greeting_txt(conn: "ConnectionHandler", text: str) -> None:
             sentence_id=conn.sentence_id,
             sentence_type=SentenceType.MIDDLE,
             content_type=ContentType.TEXT,
-            content_detail=text,
+            content_detail=spoken,
         )
     )
     conn.tts.tts_text_queue.put(
@@ -178,12 +179,11 @@ def speak_greeting_txt(conn: "ConnectionHandler", text: str) -> None:
 def speak_wake_greeting(
     conn: "ConnectionHandler", character_id: str, wake_text: str
 ) -> None:
-    """Play a varied greeting via TTS (no LLM — avoids timeout on wake)."""
+    """Play a varied greeting via normal TTS (device listening first, then speak)."""
     conn._startup_greeting_sent = True
     from core.utils.language_runtime import update_locale_from_user_text
 
     update_locale_from_user_text(conn, wake_text or "", reason="wake")
-    conn.client_abort = False
     import uuid
 
     conn.sentence_id = str(uuid.uuid4().hex)
@@ -193,12 +193,12 @@ def speak_wake_greeting(
         logger.bind(tag="wake_greeting").info(
             f"Wake greeting ({character_id}, locale={getattr(conn, 'active_locale', 'vi')}): {text}"
         )
-    arm_greeting_playback(conn)
+    _begin_greeting_tts(conn)
     speak_greeting_txt(conn, text)
 
 
 async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:
-    """First listen start after connect — auto hello (boot / touch / toggle chat)."""
+    """After first listen/start: wait for mic, then play startup hello."""
     if getattr(conn, "_startup_greeting_sent", False):
         return
     if not conn.config.get("enable_greeting", True):
@@ -223,6 +223,24 @@ async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:
     if getattr(conn, "_startup_greeting_sent", False):
         return
 
+    delay = STARTUP_GREETING_DELAY_SEC
+    wg = conn.config.get("wake_greeting") or {}
+    if isinstance(wg, dict) and wg.get("startup_delay_sec") is not None:
+        try:
+            delay = max(0.0, float(wg["startup_delay_sec"]))
+        except (TypeError, ValueError):
+            pass
+
+    if delay > 0:
+        if logger:
+            logger.bind(tag="wake_greeting").debug(
+                f"Startup greeting delay {delay:.1f}s (device listen settle)"
+            )
+        await asyncio.sleep(delay)
+
+    if getattr(conn, "_startup_greeting_sent", False):
+        return
+
     char_id = (
         getattr(conn, "active_character", None)
         or conn.config.get("character")
@@ -230,7 +248,7 @@ async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:
     )
     if logger:
         logger.bind(tag="wake_greeting").info(
-            f"Startup greeting queued ({char_id}, device={getattr(conn, 'device_id', '?')})"
+            f"Startup greeting ({char_id}, device={getattr(conn, 'device_id', '?')})"
         )
     if getattr(conn, "executor", None):
         conn.executor.submit(speak_wake_greeting, conn, char_id, "")

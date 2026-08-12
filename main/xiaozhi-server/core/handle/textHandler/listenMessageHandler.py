@@ -48,10 +48,6 @@ class ListenTextMessageHandler(TextMessageHandler):
                 # still reset ASR/VAD so motor noise does not block the next utterance.
                 conn.clearSpeakStatus()
                 conn.reset_audio_states()
-                if getattr(conn, "_playback_greeting", False):
-                    from core.utils.wake_greeting import _finish_greeting_playback
-
-                    _finish_greeting_playback(conn)
                 return
 
             conn._last_listen_start_at = now

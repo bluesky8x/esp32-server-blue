@@ -314,11 +314,6 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
     if state == "stop":
         # 保存当前的 sentence_id，用于后续判断是否是当前轮次
         current_sentence_id = conn.sentence_id
-        is_greeting = getattr(conn, "_playback_greeting", False)
-
-        # Tell the device immediately so it is not stuck in speaking while the
-        # server waits for the outbound audio queue to drain.
-        await conn.websocket.send(json.dumps(message))
 
         tts_notify = conn.config.get("enable_stop_tts_notify", False)
         if tts_notify:
@@ -328,6 +323,8 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
             audios = await audio_to_data(stop_tts_notify_voice, is_opus=True)
             await sendAudio(conn, audios)
 
+        # Wait until all audio packets are sent before tts stop — otherwise the
+        # device leaves speaking while the speaker is still playing (mic echo).
         try:
             await asyncio.wait_for(_wait_for_audio_completion(conn), timeout=15.0)
         except asyncio.TimeoutError:
@@ -335,20 +332,17 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
                 "Timed out waiting for audio completion on tts stop"
             )
 
-        # Always release speaking/greeting gate so mic uplink is accepted again.
-        if is_greeting:
-            from core.utils.wake_greeting import _finish_greeting_playback
-
-            _finish_greeting_playback(conn)
-        else:
-            conn.clearSpeakStatus()
-            conn.reset_audio_states()
+        conn.clearSpeakStatus()
+        conn.reset_audio_states()
 
         if current_sentence_id != conn.sentence_id:
+            await conn.websocket.send(json.dumps(message))
             return
 
         if hasattr(conn, "audio_rate_controller") and conn.audio_rate_controller:
             conn.audio_rate_controller.stop_sending()
+
+        await conn.websocket.send(json.dumps(message))
 
         if hasattr(conn, "flush_post_tts_actions"):
             asyncio.create_task(_delayed_flush_post_tts_actions(conn))

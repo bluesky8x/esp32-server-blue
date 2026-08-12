@@ -67,10 +67,11 @@ tool_call_timeout: 30
 enable_wakeup_words_response_cache: false
 # 开场是否回复唤醒词
 enable_greeting: true
-# Startup hello when robot sends first listen/start (boot connect, touch, boot button).
-# Set wake_greeting.startup: false to disable while keeping wake-word greetings.
+# Touch/boot → device listen/start (mic on) first; server TTS greeting after short delay.
+# Set wake_greeting.startup: false to disable auto hello on connect.
 wake_greeting:
   startup: true
+  startup_delay_sec: 0.6
 
 # 说完话是否开启提示音
 enable_stop_tts_notify: false
