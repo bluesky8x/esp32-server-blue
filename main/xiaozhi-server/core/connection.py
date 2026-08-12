@@ -404,6 +404,17 @@ class ConnectionHandler:
             if not pcm_frame:
                 return
 
+            # AutoStop firmware only uplinks in listening — if speaking flag is still
+            # set (slow TTS stop, greeting, or watchdog desync), accept the audio.
+            if (
+                self.client_is_speaking
+                and self.client_listen_mode != "manual"
+            ):
+                self.logger.bind(tag=TAG).info(
+                    "Device uplink while speaking flag set — clearing stale speaking state"
+                )
+                self.clearSpeakStatus()
+
             if self.vad is None or self.asr is None:
                 self._buffer_early_audio(pcm_frame)
                 return

@@ -122,8 +122,13 @@ robot_move_max_sequence: 5
 
 # INMP441 on Blue V2 — relax FFT band gate; strong RMS bypasses low_speech_band reject.
 speech_filter:
-  min_speech_band_ratio: 0.18
-  rms_hard_bypass: 2000
+  min_rms: 80
+  min_speech_band_ratio: 0.12
+  rms_hard_bypass: 800
+  rms_fallback_threshold: 400
+  rms_fallback_frames: 20
+  rms_fallback_buffer_frames: 200
+  max_speech_duration_ms: 4500
 
 # Runtime locale (vi / en) — ASR + TTS switch per connection when user language changes
 language_runtime:
@@ -669,12 +674,12 @@ ASR:
 VAD:
   SileroVAD:
     type: silero
-    threshold: 0.58
-    threshold_low: 0.32
+    threshold: 0.35
+    threshold_low: 0.15
     model_dir: models/snakers4_silero-vad
-    min_silence_duration_ms: 800
-    min_speech_duration_ms: 500
-    frame_window_threshold: 4
+    min_silence_duration_ms: 600
+    min_speech_duration_ms: 300
+    frame_window_threshold: 2
 
 LLM:
   # 所有openai类型均可以修改超参，以AliLLM为例

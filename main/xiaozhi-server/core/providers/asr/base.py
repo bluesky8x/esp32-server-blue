@@ -78,9 +78,11 @@ class ASRProviderBase(ABC):
 
     # 接收音频
     async def receive_audio(self, conn: "ConnectionHandler", pcm_frame, audio_have_voice):
-        # 机器人播放 TTS 时忽略麦克风（防回声/噪音触发 ASR 打断播报）
         if conn.client_is_speaking and conn.client_listen_mode != "manual":
-            return
+            conn.clearSpeakStatus()
+            logger.bind(tag=TAG).info(
+                "Cleared stale speaking flag — processing device uplink"
+            )
 
         if conn.client_listen_mode == "manual":
             # 手动模式：缓存音频用于ASR识别
@@ -101,7 +103,7 @@ class ASRProviderBase(ABC):
                         and conn.asr.interface_type != InterfaceType.STREAM
                     ):
                         pcm_bytes = b"".join(conn.asr_audio)
-                        if len(pcm_bytes) > _PCM_FRAME_BYTES * 15:
+                        if len(pcm_bytes) > _PCM_FRAME_BYTES * 10:
                             logger.bind(tag=TAG).info(
                                 f"Force ASR: RMS fallback rms={frame_rms:.0f} "
                                 f"frames={conn._rms_force_frames}"
@@ -112,17 +114,33 @@ class ASRProviderBase(ABC):
                     return
 
                 conn._rms_force_frames = 0
-                conn.asr_audio = conn.asr_audio[-10:]
+                conn.asr_audio = conn.asr_audio[-25:]
                 return
 
             conn._rms_force_frames = 0
+
+            # Force end-of-utterance if user keeps talking (VAD never sees silence gap).
+            if conn.client_have_voice and not conn.client_voice_stop:
+                speech_ms = time.time() * 1000 - getattr(
+                    conn, "vad_speech_start_time", 0
+                )
+                max_ms = float(
+                    (conn.config.get("speech_filter") or {}).get(
+                        "max_speech_duration_ms", 4500
+                    )
+                )
+                if speech_ms >= max_ms and len(conn.asr_audio) > 10:
+                    logger.bind(tag=TAG).info(
+                        f"Force voice_stop after {speech_ms:.0f}ms continuous speech"
+                    )
+                    conn.client_voice_stop = True
 
             # 自动模式下通过VAD检测到语音停止时触发识别
             if conn.asr.interface_type != InterfaceType.STREAM and conn.client_voice_stop:
                 # 直接使用asr_audio中的PCM数据
                 pcm_bytes = b"".join(conn.asr_audio)
-                # 检查是否有足够的音频数据（每帧1920字节，15帧约28800字节）
-                if len(pcm_bytes) > 1920 * 15:
+                # 检查是否有足够的音频数据（每帧1920字节，10帧约19200字节）
+                if len(pcm_bytes) > 1920 * 10:
                     await self.handle_voice_stop(conn, [pcm_bytes])
                 conn.reset_audio_states()
 
@@ -130,9 +148,10 @@ class ASRProviderBase(ABC):
     async def handle_voice_stop(self, conn: "ConnectionHandler", asr_audio_task: List[bytes]):
         """并行处理ASR和声纹识别"""
         if conn.client_is_speaking and conn.client_listen_mode != "manual":
-            logger.bind(tag=TAG).debug("助手播报中，忽略 ASR 结果（防回声打断）")
-            conn.reset_audio_states()
-            return
+            conn.clearSpeakStatus()
+            logger.bind(tag=TAG).debug(
+                "Cleared speaking flag at voice_stop (device uplink desync)"
+            )
 
         try:
             total_start_time = time.monotonic()
