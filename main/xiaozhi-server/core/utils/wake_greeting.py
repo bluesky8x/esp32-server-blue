@@ -118,10 +118,24 @@ def pick_wake_greeting(conn: "ConnectionHandler", character_id: str) -> str:
 
 
 def arm_greeting_playback(conn: "ConnectionHandler") -> None:
+    """Mute uplink on device (speaking) and server during startup greeting."""
     conn.client_abort = False
     conn.reset_audio_states()
     conn.client_is_speaking = True
     conn._playback_greeting = True
+    loop = getattr(conn, "loop", None)
+    if loop is not None:
+        from core.handle.sendAudioHandle import send_tts_message
+
+        future = asyncio.run_coroutine_threadsafe(send_tts_message(conn, "start"), loop)
+        try:
+            future.result(timeout=3)
+        except Exception as exc:
+            logger = getattr(conn, "logger", None)
+            if logger:
+                logger.bind(tag="wake_greeting").warning(
+                    f"Greeting tts start failed: {exc}"
+                )
 
 
 def _finish_greeting_playback(conn: "ConnectionHandler") -> None:
