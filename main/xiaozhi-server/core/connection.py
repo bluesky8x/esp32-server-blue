@@ -1407,7 +1407,6 @@ class ConnectionHandler:
         def _on_mv_tool_done(
             fut, mv_step=step, tool=tool_name, mv_duration=duration_sec
         ):
-            self._robot_move_in_flight = False
             try:
                 result = fut.result()
                 action = getattr(result, "action", None)
@@ -1422,18 +1421,49 @@ class ConnectionHandler:
                 self.logger.bind(tag=TAG).error(
                     f"[mv] failed mv:{format_move_step(mv_step)} → {tool}: {exc}"
                 )
-            self._start_robot_move_cooldown(mv_duration if mv_step.code != "s" else None)
+
+            # MCP returns when the move is queued on-device, not when motors stop.
+            # Release the TTS gate immediately; reset ASR/VAD after the physical move.
             self.clearSpeakStatus()
-            self.reset_audio_states()
-            if (
-                self._robot_move_sequence_queue
-                and not getattr(self, "_robot_move_shutdown", False)
-                and not (getattr(self, "stop_event", None) and self.stop_event.is_set())
-            ):
+
+            move_sec = (
+                float(mv_duration or 0)
+                if mv_step.code != "s" and mv_duration
+                else 0.0
+            )
+            settle_sec = move_sec + 0.15 if move_sec > 0 else 0.0
+
+            def _after_physical_move() -> None:
+                self._robot_move_in_flight = False
+                self.reset_audio_states()
                 self.logger.bind(tag=TAG).info(
-                    f"[mv] next in queue ({len(self._robot_move_sequence_queue)} waiting)"
+                    f"[mv] move settled — mic buffer reset "
+                    f"(queued {move_sec:.1f}s on device)"
                 )
-                self._schedule_robot_move_pump()
+                self._start_robot_move_cooldown(
+                    mv_duration if mv_step.code != "s" else None
+                )
+                if (
+                    self._robot_move_sequence_queue
+                    and not getattr(self, "_robot_move_shutdown", False)
+                    and not (
+                        getattr(self, "stop_event", None)
+                        and self.stop_event.is_set()
+                    )
+                ):
+                    self.logger.bind(tag=TAG).info(
+                        f"[mv] next in queue ({len(self._robot_move_sequence_queue)} waiting)"
+                    )
+                    self._schedule_robot_move_pump()
+
+            loop = getattr(self, "loop", None)
+            if settle_sec > 0 and loop is not None:
+                self.logger.bind(tag=TAG).info(
+                    f"[mv] waiting {settle_sec:.1f}s for on-device move before mic reset"
+                )
+                loop.call_later(settle_sec, _after_physical_move)
+            else:
+                _after_physical_move()
 
         future = asyncio.run_coroutine_threadsafe(
             self.func_handler.handle_llm_function_call(
