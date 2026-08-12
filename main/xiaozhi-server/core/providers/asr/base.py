@@ -11,6 +11,7 @@ import tempfile
 import traceback
 import threading
 
+import numpy as np
 from abc import ABC, abstractmethod
 from config.logger import setup_logging
 from core.providers.asr.dto.dto import InterfaceType
@@ -27,6 +28,23 @@ if TYPE_CHECKING:
 
 TAG = __name__
 logger = setup_logging()
+
+_PCM_FRAME_BYTES = 1920  # 60ms @ 16kHz mono int16
+
+
+def _pcm_frame_rms(pcm_frame: bytes) -> float:
+    if not pcm_frame or len(pcm_frame) < 4:
+        return 0.0
+    audio = np.frombuffer(pcm_frame, dtype=np.int16).astype(np.float32)
+    return float(np.sqrt(np.mean(audio**2)))
+
+
+def _rms_fallback_settings(conn: "ConnectionHandler") -> tuple[float, int, int]:
+    sf = (conn.config.get("speech_filter") or {}) if conn.config else {}
+    threshold = float(sf.get("rms_fallback_threshold", 2400))
+    frames = int(sf.get("rms_fallback_frames", 35))
+    keep = int(sf.get("rms_fallback_buffer_frames", 150))
+    return threshold, frames, keep
 
 
 class ASRProviderBase(ABC):
@@ -73,8 +91,31 @@ class ASRProviderBase(ABC):
 
             # 如果没有语音，且之前也没有声音，缓存部分音频
             if not audio_have_voice and not conn.client_have_voice:
+                threshold, force_frames, keep_frames = _rms_fallback_settings(conn)
+                frame_rms = _pcm_frame_rms(pcm_frame)
+                if frame_rms >= threshold:
+                    conn._rms_force_frames = getattr(conn, "_rms_force_frames", 0) + 1
+                    conn.asr_audio = conn.asr_audio[-keep_frames:]
+                    if (
+                        conn._rms_force_frames >= force_frames
+                        and conn.asr.interface_type != InterfaceType.STREAM
+                    ):
+                        pcm_bytes = b"".join(conn.asr_audio)
+                        if len(pcm_bytes) > _PCM_FRAME_BYTES * 15:
+                            logger.bind(tag=TAG).info(
+                                f"Force ASR: RMS fallback rms={frame_rms:.0f} "
+                                f"frames={conn._rms_force_frames}"
+                            )
+                            conn._rms_force_frames = 0
+                            await self.handle_voice_stop(conn, [pcm_bytes])
+                            conn.reset_audio_states()
+                    return
+
+                conn._rms_force_frames = 0
                 conn.asr_audio = conn.asr_audio[-10:]
                 return
+
+            conn._rms_force_frames = 0
 
             # 自动模式下通过VAD检测到语音停止时触发识别
             if conn.asr.interface_type != InterfaceType.STREAM and conn.client_voice_stop:
@@ -102,13 +143,14 @@ class ASRProviderBase(ABC):
 
             from core.utils.speech_filter import is_likely_speech, is_noise_transcript
 
-            if not is_likely_speech(combined_pcm_data):
-                analysis = analyze_pcm(combined_pcm_data)
+            if not is_likely_speech(combined_pcm_data, conn.config):
+                analysis = analyze_pcm(combined_pcm_data, conn.config)
                 logger.bind(tag=TAG).info(
                     f"丢弃非语音音频: {analysis.get('reason', 'unknown')} "
                     f"(rms={analysis.get('rms')}, dur={analysis.get('duration_ms')})"
                 )
-                self.stop_ws_connection()
+                conn.last_activity_time = time.time() * 1000
+                conn.reset_audio_states()
                 return
 
             # 预先准备WAV数据

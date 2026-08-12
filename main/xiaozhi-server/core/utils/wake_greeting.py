@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -119,6 +121,7 @@ def speak_wake_greeting(
     conn: "ConnectionHandler", character_id: str, wake_text: str
 ) -> None:
     """Play a varied greeting via TTS (no LLM — avoids timeout on wake)."""
+    conn._startup_greeting_sent = True
     from core.utils.language_runtime import update_locale_from_user_text
     from core.handle.intentHandler import speak_txt
 
@@ -134,3 +137,40 @@ def speak_wake_greeting(
             f"Wake greeting ({character_id}, locale={getattr(conn, 'active_locale', 'vi')}): {text}"
         )
     speak_txt(conn, text)
+
+
+async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:
+    """First listen start after connect — auto hello (boot / touch / toggle chat)."""
+    if getattr(conn, "_startup_greeting_sent", False):
+        return
+    if not conn.config.get("enable_greeting", True):
+        return
+    nested = (conn.config.get("wake_greeting") or {}).get("startup")
+    if nested is False:
+        return
+
+    start = time.time()
+    while time.time() - start < 5:
+        if conn.tts:
+            break
+        await asyncio.sleep(0.1)
+    else:
+        return
+
+    if getattr(conn, "_startup_greeting_sent", False):
+        return
+
+    char_id = (
+        getattr(conn, "active_character", None)
+        or conn.config.get("character")
+        or "kira"
+    )
+    logger = getattr(conn, "logger", None)
+    if logger:
+        logger.bind(tag="wake_greeting").info(
+            f"Startup greeting queued ({char_id}, device={getattr(conn, 'device_id', '?')})"
+        )
+    if getattr(conn, "executor", None):
+        conn.executor.submit(speak_wake_greeting, conn, char_id, "")
+    else:
+        speak_wake_greeting(conn, char_id, "")

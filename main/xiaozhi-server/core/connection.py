@@ -157,6 +157,10 @@ class ConnectionHandler:
         # 因为实际部署时可能会用到公共的本地ASR，不能把变量暴露给公共ASR
         # 所以涉及到ASR的变量，需要在这里定义，属于connection的私有变量
         self.asr_audio = []  # 存储PCM帧列表，供VAD和ASR共享
+        # Robot sends uplink immediately after connect; buffer until VAD/ASR init finishes.
+        self._early_audio_buffer: list[bytes] = []
+        self._early_audio_buffer_max = 150  # ~3s at 60ms frames
+        self._early_audio_logged = False
         self.asr_audio_queue = queue.Queue()
         self.current_speaker = None  # 存储当前说话人
         self.introduced_speakers = set()  # 已"首次引入"的说话人，控制只在首轮带名字
@@ -388,19 +392,23 @@ class ConnectionHandler:
         if isinstance(message, str):
             await handleTextMessage(self, message)
         elif isinstance(message, bytes):
-            if self.vad is None or self.asr is None:
-                return
-
             # 处理来自MQTT网关的音频包
             if self.conn_from_mqtt_gateway and len(message) >= 16:
+                if self.vad is None or self.asr is None:
+                    return
                 handled = await self._process_mqtt_audio_message(message)
                 if handled:
                     return
 
-            # 入口处直接解码PCM，避免VAD和ASR重复解码
             pcm_frame = self._decode_opus_packet(message)
-            if pcm_frame:
-                self.asr_audio_queue.put(pcm_frame)
+            if not pcm_frame:
+                return
+
+            if self.vad is None or self.asr is None:
+                self._buffer_early_audio(pcm_frame)
+                return
+
+            self.asr_audio_queue.put(pcm_frame)
 
     async def _process_mqtt_audio_message(self, message):
         """
@@ -623,6 +631,27 @@ class ConnectionHandler:
                 )
             )
 
+    def _buffer_early_audio(self, pcm_frame: bytes) -> None:
+        self._early_audio_buffer.append(pcm_frame)
+        if len(self._early_audio_buffer) > self._early_audio_buffer_max:
+            self._early_audio_buffer.pop(0)
+        if not self._early_audio_logged:
+            self._early_audio_logged = True
+            self.logger.bind(tag=TAG).info(
+                "Buffering uplink until VAD/ASR init completes (robot boot)"
+            )
+
+    def _flush_early_audio_buffer(self) -> None:
+        if not self._early_audio_buffer:
+            return
+        count = len(self._early_audio_buffer)
+        for frame in self._early_audio_buffer:
+            self.asr_audio_queue.put(frame)
+        self._early_audio_buffer.clear()
+        self.logger.bind(tag=TAG).info(
+            f"Flushed {count} early audio frame(s) buffered before ASR init"
+        )
+
     def _initialize_components(self):
         try:
             if self.tts is None:
@@ -673,6 +702,7 @@ class ConnectionHandler:
             asyncio.run_coroutine_threadsafe(
                 self.asr.open_audio_channels(self), self.loop
             )
+            self._flush_early_audio_buffer()
 
             """加载记忆"""
             self._initialize_memory()

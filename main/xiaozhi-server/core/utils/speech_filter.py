@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping, Optional
 
 import numpy as np
 
@@ -47,8 +47,25 @@ _MUSIC_HALLUCINATION_RE = re.compile(
 )
 
 
-def analyze_pcm(pcm_bytes: bytes) -> dict[str, Any]:
+def _thresholds(config: Optional[Mapping[str, Any]] = None) -> dict[str, float]:
+    sf = (config or {}).get("speech_filter") if config else None
+    sf = sf or {}
+    return {
+        "min_rms": float(sf.get("min_rms", _MIN_RMS)),
+        "min_duration_ms": float(sf.get("min_duration_ms", _MIN_DURATION_MS)),
+        "min_speech_band_ratio": float(
+            sf.get("min_speech_band_ratio", _MIN_SPEECH_BAND_RATIO)
+        ),
+        "max_zcr": float(sf.get("max_zcr", _MAX_ZCR)),
+        "rms_hard_bypass": float(sf.get("rms_hard_bypass", 0)),
+    }
+
+
+def analyze_pcm(
+    pcm_bytes: bytes, config: Optional[Mapping[str, Any]] = None
+) -> dict[str, Any]:
     """Heuristic check: is this chunk likely human speech (not only noise/music)?"""
+    thresholds = _thresholds(config)
     if not pcm_bytes or len(pcm_bytes) < 640:
         return {"valid": False, "reason": "too_short_bytes"}
 
@@ -58,15 +75,24 @@ def analyze_pcm(pcm_bytes: bytes) -> dict[str, Any]:
 
     duration_ms = len(audio) / _SAMPLE_RATE * 1000
     rms = float(np.sqrt(np.mean(audio**2)))
-    if rms < _MIN_RMS:
+    if rms < thresholds["min_rms"]:
         return {"valid": False, "reason": "too_quiet", "rms": rms, "duration_ms": duration_ms}
 
-    if duration_ms < _MIN_DURATION_MS:
+    if duration_ms < thresholds["min_duration_ms"]:
         return {"valid": False, "reason": "too_short", "rms": rms, "duration_ms": duration_ms}
+
+    bypass = thresholds["rms_hard_bypass"]
+    if bypass > 0 and rms >= bypass:
+        return {
+            "valid": True,
+            "rms": rms,
+            "duration_ms": duration_ms,
+            "reason": "rms_hard_bypass",
+        }
 
     signs = np.sign(audio)
     zcr = float(np.mean(np.abs(np.diff(signs)) > 0) / 2)
-    if zcr > _MAX_ZCR:
+    if zcr > thresholds["max_zcr"]:
         return {"valid": False, "reason": "high_zcr", "rms": rms, "zcr": zcr}
 
     window = np.hanning(len(audio))
@@ -74,7 +100,7 @@ def analyze_pcm(pcm_bytes: bytes) -> dict[str, Any]:
     freqs = np.fft.rfftfreq(len(audio), 1 / _SAMPLE_RATE)
     speech_mask = (freqs >= 300) & (freqs <= 3400)
     speech_ratio = float(np.sum(spectrum[speech_mask]) / (np.sum(spectrum) + 1e-8))
-    if speech_ratio < _MIN_SPEECH_BAND_RATIO:
+    if speech_ratio < thresholds["min_speech_band_ratio"]:
         return {
             "valid": False,
             "reason": "low_speech_band",
@@ -92,8 +118,10 @@ def analyze_pcm(pcm_bytes: bytes) -> dict[str, Any]:
     }
 
 
-def is_likely_speech(pcm_bytes: bytes) -> bool:
-    return analyze_pcm(pcm_bytes).get("valid", False)
+def is_likely_speech(
+    pcm_bytes: bytes, config: Optional[Mapping[str, Any]] = None
+) -> bool:
+    return analyze_pcm(pcm_bytes, config).get("valid", False)
 
 
 def is_noise_transcript(text: str) -> bool:

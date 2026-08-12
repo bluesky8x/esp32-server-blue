@@ -37,6 +37,9 @@ class ListenTextMessageHandler(TextMessageHandler):
             # Device back to listening — ensure ASR accepts uplink (not stuck in speaking).
             conn.clearSpeakStatus()
             conn.reset_audio_states()
+            from core.utils.wake_greeting import maybe_speak_startup_greeting
+
+            asyncio.create_task(maybe_speak_startup_greeting(conn))
         elif msg_json["state"] == "stop":
             # 收到stop但asr未初始化，跳过处理
             if conn.asr is None:
