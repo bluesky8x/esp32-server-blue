@@ -117,6 +117,16 @@ def pick_wake_greeting(conn: "ConnectionHandler", character_id: str) -> str:
     return choice
 
 
+async def _arm_greeting_playback(conn: "ConnectionHandler") -> None:
+    """Mute uplink on server + tell device to enter speaking before greeting audio."""
+    from core.handle.sendAudioHandle import send_tts_message
+
+    conn.client_abort = False
+    conn.reset_audio_states()
+    await send_tts_message(conn, "start")
+    conn.client_is_speaking = True
+
+
 def speak_wake_greeting(
     conn: "ConnectionHandler", character_id: str, wake_text: str
 ) -> None:
@@ -136,6 +146,16 @@ def speak_wake_greeting(
         logger.bind(tag="wake_greeting").info(
             f"Wake greeting ({character_id}, locale={getattr(conn, 'active_locale', 'vi')}): {text}"
         )
+    loop = getattr(conn, "loop", None)
+    if loop is not None:
+        future = asyncio.run_coroutine_threadsafe(_arm_greeting_playback(conn), loop)
+        try:
+            future.result(timeout=5)
+        except Exception as exc:
+            if logger:
+                logger.bind(tag="wake_greeting").warning(
+                    f"Greeting tts start failed: {exc}"
+                )
     speak_txt(conn, text)
 
 
@@ -149,12 +169,17 @@ async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:
     if nested is False:
         return
 
+    logger = getattr(conn, "logger", None)
     start = time.time()
-    while time.time() - start < 5:
-        if conn.tts:
+    while time.time() - start < 10:
+        if conn.tts and conn.asr is not None and conn.vad is not None:
             break
         await asyncio.sleep(0.1)
     else:
+        if logger:
+            logger.bind(tag="wake_greeting").warning(
+                "Startup greeting skipped — TTS/ASR/VAD not ready within 10s"
+            )
         return
 
     if getattr(conn, "_startup_greeting_sent", False):
@@ -165,7 +190,6 @@ async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:
         or conn.config.get("character")
         or "kira"
     )
-    logger = getattr(conn, "logger", None)
     if logger:
         logger.bind(tag="wake_greeting").info(
             f"Startup greeting queued ({char_id}, device={getattr(conn, 'device_id', '?')})"
