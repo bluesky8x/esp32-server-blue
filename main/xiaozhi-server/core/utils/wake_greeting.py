@@ -144,13 +144,43 @@ def _finish_greeting_playback(conn: "ConnectionHandler") -> None:
     conn.reset_audio_states()
 
 
+def speak_greeting_txt(conn: "ConnectionHandler", text: str) -> None:
+    """Queue greeting as one TTS chunk (avoid !/? split delays)."""
+    from core.utils.dialogue import Message
+    from core.providers.tts.dto.dto import ContentType, SentenceType, TTSMessageDTO
+
+    conn.tts.store_tts_text(conn.sentence_id, text)
+    conn.tts.tts_text_queue.put(
+        TTSMessageDTO(
+            sentence_id=conn.sentence_id,
+            sentence_type=SentenceType.FIRST,
+            content_type=ContentType.ACTION,
+        )
+    )
+    conn.tts.tts_text_queue.put(
+        TTSMessageDTO(
+            sentence_id=conn.sentence_id,
+            sentence_type=SentenceType.MIDDLE,
+            content_type=ContentType.TEXT,
+            content_detail=text,
+        )
+    )
+    conn.tts.tts_text_queue.put(
+        TTSMessageDTO(
+            sentence_id=conn.sentence_id,
+            sentence_type=SentenceType.LAST,
+            content_type=ContentType.ACTION,
+        )
+    )
+    conn.dialogue.put(Message(role="assistant", content=text))
+
+
 def speak_wake_greeting(
     conn: "ConnectionHandler", character_id: str, wake_text: str
 ) -> None:
     """Play a varied greeting via TTS (no LLM — avoids timeout on wake)."""
     conn._startup_greeting_sent = True
     from core.utils.language_runtime import update_locale_from_user_text
-    from core.handle.intentHandler import speak_txt
 
     update_locale_from_user_text(conn, wake_text or "", reason="wake")
     conn.client_abort = False
@@ -164,7 +194,7 @@ def speak_wake_greeting(
             f"Wake greeting ({character_id}, locale={getattr(conn, 'active_locale', 'vi')}): {text}"
         )
     arm_greeting_playback(conn)
-    speak_txt(conn, text)
+    speak_greeting_txt(conn, text)
 
 
 async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:

@@ -314,7 +314,12 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
     if state == "stop":
         # 保存当前的 sentence_id，用于后续判断是否是当前轮次
         current_sentence_id = conn.sentence_id
-        # 播放提示音
+        is_greeting = getattr(conn, "_playback_greeting", False)
+
+        # Tell the device immediately so it is not stuck in speaking while the
+        # server waits for the outbound audio queue to drain.
+        await conn.websocket.send(json.dumps(message))
+
         tts_notify = conn.config.get("enable_stop_tts_notify", False)
         if tts_notify:
             stop_tts_notify_voice = conn.config.get(
@@ -322,11 +327,16 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
             )
             audios = await audio_to_data(stop_tts_notify_voice, is_opus=True)
             await sendAudio(conn, audios)
-        # 等待所有音频包发送完成
-        await _wait_for_audio_completion(conn)
+
+        try:
+            await asyncio.wait_for(_wait_for_audio_completion(conn), timeout=15.0)
+        except asyncio.TimeoutError:
+            conn.logger.bind(tag=TAG).warning(
+                "Timed out waiting for audio completion on tts stop"
+            )
 
         # Always release speaking/greeting gate so mic uplink is accepted again.
-        if getattr(conn, "_playback_greeting", False):
+        if is_greeting:
             from core.utils.wake_greeting import _finish_greeting_playback
 
             _finish_greeting_playback(conn)
@@ -334,21 +344,18 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
             conn.clearSpeakStatus()
             conn.reset_audio_states()
 
-        # 检查是否是当前轮次（仅影响流控器停止，不影响上面的状态清理）
         if current_sentence_id != conn.sentence_id:
-            await conn.websocket.send(json.dumps(message))
             return
 
-        # 停止音频发送循环（仅在流控器已初始化时调用）
         if hasattr(conn, "audio_rate_controller") and conn.audio_rate_controller:
             conn.audio_rate_controller.stop_sending()
 
+        if hasattr(conn, "flush_post_tts_actions"):
+            asyncio.create_task(_delayed_flush_post_tts_actions(conn))
+        return
+
     # 发送消息到客户端
     await conn.websocket.send(json.dumps(message))
-
-    # Deferred motor / ToF / volume MCP — after device has time to enter listening.
-    if state == "stop" and hasattr(conn, "flush_post_tts_actions"):
-        asyncio.create_task(_delayed_flush_post_tts_actions(conn))
 
 
 async def send_stt_message(conn: "ConnectionHandler", text):
