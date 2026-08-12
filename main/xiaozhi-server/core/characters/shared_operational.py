@@ -48,11 +48,13 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 
 **Format:** `<câu nói tự nhiên> mv:<code>[:<seconds>]` — tags always at the **very end**.
 
-**Multi-step (max {n} moves per reply):** e.g. "đi tới 10 giây, quẹo phải 5 giây, dừng" →
-`... mv:f:10 mv:p:5 mv:s`
+**Multi-step (max {n} moves per reply):** **one `mv:*` tag per action**, in order.
+User: *"đi tới rồi quẹo phải"* → `... mv:f:5 mv:p:5` (both tags required).
+Example with times: *"đi tới 10 giây, quẹo phải 5 giây, dừng"* → `... mv:f:10 mv:p:5 mv:s`
 
 {examples_block}
 ❌ Bad: replying about turning/moving **without** the matching `mv:*` tag
+❌ Bad: *"Mình đi tới rồi quẹo phải nha mv:f:5"* — promised two moves but only one tag (robot skips quẹo phải)
 ❌ Bad: *"Mình quay phải trước, rồi sẽ quay trái sau"* (no `mv:t` — robot never turns left)
 ❌ Bad: *"Mình đi mv:t rồi nha"* (code in the middle — never do this)
 

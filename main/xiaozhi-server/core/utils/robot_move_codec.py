@@ -269,26 +269,19 @@ def extract_move_steps_from_assistant_reply(
     *,
     default_sec: int = DEFAULT_ROBOT_MOVE_DURATION_SEC,
     max_sec: int = MAX_ROBOT_MOVE_DURATION_SEC,
-    allow_inference: bool = True,
+    allow_inference: bool = False,
 ) -> list[RobotMoveStep]:
+    """Parse mv:* tags from the assistant reply. Inference is opt-in (legacy)."""
     explicit = extract_move_steps(text, default_sec=default_sec, max_sec=max_sec)
-    if explicit:
+    if explicit or not allow_inference:
         return limit_robot_move_steps(explicit)
-    if not allow_inference:
-        return []
 
     spoken = strip_move_tags(text or "", trim_edges=True)
     inferred_codes = infer_mv_codes_multi(spoken)
     inferred_duration = infer_duration_from_text(spoken, max_sec=max_sec)
 
     merged: list[RobotMoveStep] = []
-    for step in explicit:
-        if step not in merged:
-            merged.append(step)
-
     for code in inferred_codes:
-        if any(item.code == code for item in merged):
-            continue
         duration = (
             inferred_duration
             if inferred_duration is not None and len(inferred_codes) == 1
@@ -303,7 +296,7 @@ def extract_move_steps_from_assistant_reply(
     fallback_codes = infer_mv_codes_from_reply(text)
     if not fallback_codes:
         return []
-    duration = infer_duration_from_text(strip_move_tags(text, trim_edges=True), max_sec=max_sec)
+    duration = infer_duration_from_text(spoken, max_sec=max_sec)
     if duration is None:
         duration = default_sec
     return [
@@ -450,7 +443,7 @@ def finalize_stream_text_for_tts(
     *,
     default_sec: int = DEFAULT_ROBOT_MOVE_DURATION_SEC,
     max_sec: int = MAX_ROBOT_MOVE_DURATION_SEC,
-    allow_inference: bool = True,
+    allow_inference: bool = False,
 ) -> tuple[str, list[RobotMoveStep]]:
     cleaned = strip_move_tags(text or "", trim_edges=False)
     steps = extract_move_steps(text or "", default_sec=default_sec, max_sec=max_sec)

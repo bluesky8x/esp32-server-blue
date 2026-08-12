@@ -113,6 +113,8 @@ character_memory:
 # Blue V1 — motor queue + emergency failsafe (cancel queue + stop on "dừng lại ngay")
 robot_move:
   emergency_stop: true
+  # false = only LLM mv:* tags move the robot (recommended). true = legacy server text inference.
+  allow_inference: false
 robot_move_step_delay_seconds: 1.5
 robot_move_default_duration_seconds: 5
 robot_move_max_duration_seconds: 30

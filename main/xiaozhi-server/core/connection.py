@@ -777,6 +777,12 @@ class ConnectionHandler:
     def _robot_move_max_duration(self) -> int:
         return int(self.config.get("robot_move_max_duration_seconds", 30))
 
+    def _robot_move_allow_inference(self) -> bool:
+        block = self.config.get("robot_move")
+        if isinstance(block, dict):
+            return bool(block.get("allow_inference", False))
+        return bool(self.config.get("robot_move_allow_inference", False))
+
     def _shutdown_robot_moves(self) -> None:
         """Cancel pending motor timers and drop queued moves on disconnect/shutdown."""
         self._robot_move_shutdown = True
@@ -1440,9 +1446,7 @@ class ConnectionHandler:
                     f"[mv] move settled — mic buffer reset "
                     f"(queued {move_sec:.1f}s on device)"
                 )
-                self._start_robot_move_cooldown(
-                    mv_duration if mv_step.code != "s" else None
-                )
+                self._start_robot_move_cooldown()
                 if (
                     self._robot_move_sequence_queue
                     and not getattr(self, "_robot_move_shutdown", False)
@@ -1500,7 +1504,7 @@ class ConnectionHandler:
                 f"[mv] skip ({label}): user move_intent=False this turn"
             )
             return
-        allow_inference = True
+        allow_inference = self._robot_move_allow_inference()
         steps = extract_move_steps_from_assistant_reply(
             text,
             default_sec=self._robot_move_default_duration(),
@@ -1508,8 +1512,13 @@ class ConnectionHandler:
             allow_inference=allow_inference,
         )
         if not steps:
+            if allow_inference:
+                return
+            self.logger.bind(tag=TAG).warning(
+                f"[mv] no mv:* tags in LLM reply ({label}) — robot will not move «{text[:80]}»"
+            )
             return
-        if not extract_move_codes(text):
+        if allow_inference and not extract_move_codes(text):
             tag_repr = [format_move_step(s) for s in steps]
             self.logger.bind(tag=TAG).info(
                 f"[mv] inferred ({label}): {tag_repr} «{text[:80]}»"
@@ -1622,7 +1631,7 @@ class ConnectionHandler:
                 work,
                 default_sec=default_sec,
                 max_sec=max_sec,
-                allow_inference=bool(getattr(self, "_user_requested_move", False)),
+                allow_inference=self._robot_move_allow_inference(),
             )
             mv_hold = ""
         else:
@@ -1693,6 +1702,7 @@ class ConnectionHandler:
             pending,
             default_sec=self._robot_move_default_duration(),
             max_sec=self._robot_move_max_duration(),
+            allow_inference=self._robot_move_allow_inference(),
         )
         if steps:
             self._dispatch_robot_move_steps(
