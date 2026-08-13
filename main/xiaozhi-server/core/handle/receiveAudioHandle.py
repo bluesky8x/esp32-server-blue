@@ -155,6 +155,12 @@ async def startToChat(conn: "ConnectionHandler", text, *, system_prompt: bool = 
         )
         return
 
+    if getattr(conn, "_wx_followup_pending", False):
+        conn.logger.bind(tag=TAG).info(
+            f"Skipping chat — wx follow-up pending: {actual_text[:80]!r}"
+        )
+        return
+
     # 角色唤醒：先切换再打招呼（并清除 abort，否则 TTS 被跳过）
     if is_character_wake:
         conn.client_abort = False

@@ -277,6 +277,12 @@ class ASRProviderBase(ABC):
                         f"{content_for_length_check[:80]!r}"
                     )
                     return
+                if getattr(conn, "_wx_followup_pending", False):
+                    logger.bind(tag=TAG).info(
+                        f"Skipping ASR → chat — wx follow-up pending: "
+                        f"{content_for_length_check[:80]!r}"
+                    )
+                    return
                 audio_snapshot = asr_audio_task.copy()
                 enqueue_asr_report(conn, enhanced_text, audio_snapshot)
                 # 使用自定义模块进行上报

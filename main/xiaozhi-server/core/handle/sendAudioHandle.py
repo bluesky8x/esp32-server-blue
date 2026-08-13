@@ -31,8 +31,8 @@ async def _delayed_flush_post_tts_actions(conn: "ConnectionHandler") -> None:
 
 
 async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text, sentence_id=None):
-    # 跳过旧句子残留音频
-    if sentence_id is not None and sentence_id != conn.sentence_id:
+    # 跳过旧句子残留音频（wx follow-up 使用独立 sentence_id）
+    if sentence_id is not None and not conn._sentence_id_allowed(sentence_id):
         return
 
     if conn.tts.tts_audio_first_sentence:
@@ -63,6 +63,12 @@ async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text
     # 通话需要维持speaking状态
     if not conn.calling and sentenceType == SentenceType.LAST:
         await send_tts_message(conn, "stop", None)
+        if (
+            getattr(conn, "_wx_followup_pending", False)
+            and sentence_id
+            and sentence_id == getattr(conn, "_wx_followup_sentence_id", None)
+        ):
+            conn._clear_wx_followup(reason="speech delivered")
         pending_char = getattr(conn, "_pending_char_switch_greeting", None)
         if pending_char:
             conn._pending_char_switch_greeting = None

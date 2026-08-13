@@ -115,6 +115,9 @@ class ConnectionHandler:
         self.client_abort = False
         self.client_is_speaking = False
         self._chat_active = False
+        self._wx_followup_pending = False
+        self._wx_followup_sentence_id = None
+        self._wx_followup_watchdog_task = None
         self.client_listen_mode = "auto"
         self.client_aec = False  # 是否启用了服务端AEC
 
@@ -1038,6 +1041,54 @@ class ConnectionHandler:
         )
         future.add_done_callback(_on_tof_done)
 
+    def _wx_followup_active(self) -> bool:
+        return bool(getattr(self, "_wx_followup_pending", False))
+
+    def _sentence_id_allowed(self, sentence_id: str | None) -> bool:
+        if sentence_id is None:
+            return True
+        if sentence_id == self.sentence_id:
+            return True
+        wx_id = getattr(self, "_wx_followup_sentence_id", None)
+        return bool(wx_id and sentence_id == wx_id)
+
+    def _clear_wx_followup(self, *, reason: str = "") -> None:
+        task = getattr(self, "_wx_followup_watchdog_task", None)
+        if task and not task.done():
+            task.cancel()
+        self._wx_followup_watchdog_task = None
+        if getattr(self, "_wx_followup_pending", False):
+            self._wx_followup_pending = False
+            self._wx_followup_sentence_id = None
+            if reason:
+                self.logger.bind(tag=TAG).info(f"[wx] follow-up cleared ({reason})")
+
+    def _schedule_wx_followup_watchdog(self, timeout_sec: float = 45.0) -> None:
+        """Release mic lock if wx TTS never completes (TTS failure, crash, etc.)."""
+        loop = getattr(self, "loop", None)
+        if not loop:
+            return
+
+        async def _watch() -> None:
+            try:
+                await asyncio.sleep(timeout_sec)
+                if getattr(self, "_wx_followup_pending", False):
+                    self.logger.bind(tag=TAG).warning(
+                        f"[wx] watchdog timeout ({timeout_sec}s) — releasing mic lock"
+                    )
+                    self._clear_wx_followup(reason=f"watchdog {timeout_sec}s")
+            except asyncio.CancelledError:
+                pass
+
+        old = getattr(self, "_wx_followup_watchdog_task", None)
+        if old and not old.done():
+            old.cancel()
+
+        def _start() -> None:
+            self._wx_followup_watchdog_task = asyncio.create_task(_watch())
+
+        loop.call_soon_threadsafe(_start)
+
     def _dispatch_weather_lookup(
         self, location: str | None, *, label: str = ""
     ) -> None:
@@ -1056,6 +1107,12 @@ class ConnectionHandler:
             return
         self._executed_weather_lookups.add(dedupe_key)
 
+        import uuid
+
+        self._wx_followup_pending = True
+        self._wx_followup_sentence_id = str(uuid.uuid4().hex)
+        self._schedule_wx_followup_watchdog()
+
         locale = getattr(self, "active_locale", "vi") or "vi"
         place_label = loc_key or "local"
         self.logger.bind(tag=TAG).info(
@@ -1068,24 +1125,39 @@ class ConnectionHandler:
 
             import uuid
 
+            spoken = False
             try:
-                text = await fetch_weather_speech(
-                    self,
-                    loc_key or None,
-                    locale=locale,
+                try:
+                    text = await fetch_weather_speech(
+                        self,
+                        loc_key or None,
+                        locale=locale,
+                    )
+                except Exception as exc:
+                    self.logger.bind(tag=TAG).error(f"[wx] fetch failed: {exc}")
+                    text = None
+                if not text:
+                    text = (
+                        "Mình chưa lấy được thời tiết, thử lại sau nha."
+                        if locale != "en"
+                        else "I couldn't fetch the weather. Please try again."
+                    )
+                self.logger.bind(tag=TAG).info(f"[wx] result: {text[:160]}")
+                wx_sid = getattr(self, "_wx_followup_sentence_id", None) or str(
+                    uuid.uuid4().hex
                 )
+                self.sentence_id = wx_sid
+                self.client_abort = False
+                if getattr(self, "tts", None):
+                    speak_greeting_txt(self, text)
+                    spoken = True
+                else:
+                    self.logger.bind(tag=TAG).error("[wx] skip speak — TTS missing")
             except Exception as exc:
-                self.logger.bind(tag=TAG).error(f"[wx] fetch failed: {exc}")
-                text = None
-            if not text:
-                text = (
-                    "Mình chưa lấy được thời tiết, thử lại sau nha."
-                    if locale != "en"
-                    else "I couldn't fetch the weather. Please try again."
-                )
-            self.logger.bind(tag=TAG).info(f"[wx] result: {text[:160]}")
-            self.sentence_id = str(uuid.uuid4().hex)
-            speak_greeting_txt(self, text)
+                self.logger.bind(tag=TAG).error(f"[wx] speak pipeline failed: {exc}")
+            finally:
+                if not spoken:
+                    self._clear_wx_followup(reason="speak pipeline failed")
 
         asyncio.run_coroutine_threadsafe(_fetch_and_speak(), self.loop)
 
@@ -2987,6 +3059,7 @@ class ConnectionHandler:
 
     async def close(self, ws=None):
         """资源清理方法"""
+        self._clear_wx_followup(reason="connection close")
         try:
             # 清理 VAD 连接资源
             if (
@@ -3108,6 +3181,7 @@ class ConnectionHandler:
 
     def clear_queues(self):
         """清空所有任务队列"""
+        self._clear_wx_followup(reason="abort/clear_queues")
         if self.tts:
             self.logger.bind(tag=TAG).debug(
                 f"开始清理: TTS队列大小={self.tts.tts_text_queue.qsize()}, 音频队列大小={self.tts.tts_audio_queue.qsize()}"
