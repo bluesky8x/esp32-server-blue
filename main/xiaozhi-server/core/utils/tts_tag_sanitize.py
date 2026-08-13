@@ -17,8 +17,11 @@ _TRAILING_PARTIAL_CONTROL_RE = re.compile(
     r")+$",
     re.IGNORECASE,
 )
-# Orphan @time left when wx:place was stripped separately.
-_TRAILING_AT_PARAM_RE = re.compile(r"\s+@[a-z0-9+-]+\s*$", re.IGNORECASE)
+# Orphan @time (e.g. after partial wx strip) — covered by weather_tag_codec too.
+_TRAILING_AT_PARAM_RE = re.compile(
+    r"(?:\s+[A-Za-zÀ-ỹ][A-Za-zÀ-ỹ0-9]{0,24})?@[a-z0-9+-]+\s*$",
+    re.IGNORECASE,
+)
 
 
 def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:

@@ -19,9 +19,14 @@ WX_TAG_STRIP_RE = re.compile(
     r"\bwx\s*:\s*"
     r"(?:"
     r"(?:local|[A-Za-zÀ-ỹ0-9][A-Za-zÀ-ỹ0-9\s,.-]{0,48})"
-    r"(?:@[a-z0-9+-]+)?"
+    r"@[a-z0-9+-]+"
     r"|@[a-z0-9+-]+"
-    r")?\b",
+    r")\b",
+    re.IGNORECASE,
+)
+# Suffix leaked when streaming stripped "wx:Ho Chi" but left "Minh@3d" (word + @time).
+WX_LEAKED_TIME_SUFFIX_RE = re.compile(
+    r"(?:\s+[A-Za-zÀ-ỹ][A-Za-zÀ-ỹ0-9]{0,24})?@[a-z0-9+-]+\s*$",
     re.IGNORECASE,
 )
 
@@ -174,19 +179,28 @@ def hold_incomplete_wx_suffix(
     """Hold trailing wx:… during streaming so partial tags are not spoken or dispatched."""
     if not text:
         return "", ""
-    stripped = text.rstrip()
-    if allow_complete and extract_weather_request_from_assistant_text(stripped) is not None:
+    if allow_complete and extract_weather_request_from_assistant_text(text.rstrip()) is not None:
         return text, ""
-    match = re.search(r"\bwx\s*:.*$", stripped, re.IGNORECASE)
+    match = re.search(r"\bwx\s*:.*$", text, re.IGNORECASE)
     if match:
-        return stripped[: match.start()], stripped[match.start() :]
+        return text[: match.start()], text[match.start() :]
     return text, ""
 
 
 def strip_wx_tags(text: str, *, trim_edges: bool = False) -> str:
     if not text:
         return ""
-    cleaned = WX_TAG_STRIP_RE.sub("", text)
+    cleaned = text
+    # End-anchored complete wx: tags (same rule as dispatch — avoids eating "wx:Ho Chi"
+    # from "wx:Ho Chi Minh@3d" due to an early \\b after "Chi").
+    while True:
+        stripped = cleaned.rstrip()
+        match = WX_TAG_RE.search(stripped)
+        if not match or match.end() != len(stripped):
+            break
+        cleaned = stripped[: match.start()]
+    cleaned = WX_TAG_STRIP_RE.sub("", cleaned)
+    cleaned = WX_LEAKED_TIME_SUFFIX_RE.sub("", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     if trim_edges:
         return cleaned.strip()

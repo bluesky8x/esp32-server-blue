@@ -1753,197 +1753,90 @@ class ConnectionHandler:
     def _prepare_llm_text_for_tts(
         self, sentence_id: str | None, text: str, *, trim_edges: bool = False
     ) -> str:
-        from core.utils.memory_tag_codec import apply_mem_tags_from_assistant_text
-        from core.utils.character_switch_codec import apply_char_switch_from_assistant_text
-        from core.utils.sleep_tag_codec import apply_sleep_tag_from_assistant_text
-        from core.utils.robot_move_codec import split_robot_move_tags
-        from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
+        from core.utils.assistant_reply_tags import prepare_final_assistant_text_for_tts
 
-        if not text:
-            return ""
-        apply_mem_tags_from_assistant_text(
-            self, text, label="prepare_llm_text_for_tts"
+        return prepare_final_assistant_text_for_tts(
+            self,
+            text,
+            sentence_id=sentence_id,
+            trim_edges=trim_edges,
         )
-        apply_char_switch_from_assistant_text(
-            self, text, label="prepare_llm_text_for_tts"
-        )
-        apply_sleep_tag_from_assistant_text(
-            self, text, label="prepare_llm_text_for_tts"
-        )
-        self._dispatch_vol_from_assistant_text(
-            text, label="prepare_llm_text_for_tts", defer_post_tts=True
-        )
-        self._dispatch_tof_from_assistant_text(
-            text, label="prepare_llm_text_for_tts", defer_post_tts=True
-        )
-        self._dispatch_wx_from_assistant_text(
-            text, label="prepare_llm_text_for_tts", defer_post_tts=True
-        )
-        cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
-        cleaned = strip_control_tags_for_tts(cleaned, trim_edges=trim_edges)
-        self._dispatch_mv_from_assistant_text(
-            sentence_id, text, label="prepare_llm_text_for_tts", defer_post_tts=True
-        )
-        return cleaned
 
     def _enqueue_tts_stream_part(
         self, sentence_id: str | None, text: str, *, flush_hold: bool = False
     ) -> None:
-        """Stream-safe TTS enqueue: holds incomplete trailing mv:* / char:* / mem:* / sleep tags."""
-        from core.utils.memory_tag_codec import (
-            apply_mem_tags_from_assistant_text,
-            hold_incomplete_mem_suffix,
+        """Stream-safe TTS enqueue: holds incomplete trailing control tags."""
+        from core.utils.assistant_reply_tags import (
+            load_tag_hold_from_conn,
+            process_assistant_stream_chunk,
+            save_tag_hold_to_conn,
         )
-        from core.utils.character_switch_codec import (
-            apply_char_switch_from_assistant_text,
-            hold_incomplete_char_suffix,
-        )
-        from core.utils.sleep_tag_codec import (
-            apply_sleep_tag_from_assistant_text,
-            hold_incomplete_sleep_suffix,
-        )
-        from core.utils.robot_move_codec import (
-            finalize_stream_text_for_tts,
-            prepare_stream_chunk_for_tts,
-        )
-        from core.utils.weather_tag_codec import hold_incomplete_wx_suffix
-        from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
 
-        if flush_hold:
-            held_mv = getattr(self, "_move_tag_stream_hold", "") or ""
-            held_char = getattr(self, "_char_tag_stream_hold", "") or ""
-            held_mem = getattr(self, "_mem_tag_stream_hold", "") or ""
-            held_sleep = getattr(self, "_sleep_tag_stream_hold", "") or ""
-            held_wx = getattr(self, "_wx_tag_stream_hold", "") or ""
-            self._move_tag_stream_hold = ""
-            self._char_tag_stream_hold = ""
-            self._mem_tag_stream_hold = ""
-            self._sleep_tag_stream_hold = ""
-            self._wx_tag_stream_hold = ""
-            if held_mv or held_char or held_mem or held_sleep or held_wx:
-                text = held_mv + held_char + held_mem + held_sleep + held_wx + (text or "")
-
-        if not text and not flush_hold:
+        hold = load_tag_hold_from_conn(self)
+        spoken, hold, _ = process_assistant_stream_chunk(
+            self,
+            text or "",
+            hold,
+            sentence_id=sentence_id,
+            label="tts_stream",
+            flush=flush_hold,
+            default_mv_sec=self._robot_move_default_duration(),
+            max_mv_sec=self._robot_move_max_duration(),
+            allow_mv_inference=self._robot_move_allow_inference(),
+        )
+        save_tag_hold_to_conn(self, hold)
+        if not spoken:
             return
-
-        default_sec = self._robot_move_default_duration()
-        max_sec = self._robot_move_max_duration()
-
-        raw_chunk = text or ""
-        work, char_hold = hold_incomplete_char_suffix(raw_chunk)
-        work, mem_hold = hold_incomplete_mem_suffix(work)
-        work, sleep_hold = hold_incomplete_sleep_suffix(work)
-        work, wx_hold = hold_incomplete_wx_suffix(
-            work, allow_complete=flush_hold
+        self.tts.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=sentence_id,
+                sentence_type=SentenceType.MIDDLE,
+                content_type=ContentType.TEXT,
+                content_detail=spoken,
+            )
         )
-        self._char_tag_stream_hold = char_hold
-        self._mem_tag_stream_hold = mem_hold
-        self._sleep_tag_stream_hold = sleep_hold
-        self._wx_tag_stream_hold = wx_hold
-
-        if flush_hold and work:
-            cleaned, steps = finalize_stream_text_for_tts(
-                work,
-                default_sec=default_sec,
-                max_sec=max_sec,
-                allow_inference=self._robot_move_allow_inference(),
-            )
-            mv_hold = ""
-        else:
-            hold_mv = getattr(self, "_move_tag_stream_hold", "") or ""
-            chunk = hold_mv + work
-            cleaned, mv_hold, steps = prepare_stream_chunk_for_tts(
-                chunk, default_sec=default_sec, max_sec=max_sec
-            )
-            self._move_tag_stream_hold = mv_hold
-
-        if steps:
-            self._dispatch_robot_move_steps(
-                sentence_id, steps, defer_post_tts=True
-            )
-        elif cleaned and flush_hold:
-            self._dispatch_mv_from_assistant_text(
-                sentence_id, cleaned, label="tts_stream_final", defer_post_tts=True
-            )
-
-        if work:
-            if flush_hold:
-                apply_mem_tags_from_assistant_text(
-                    self, work, label="tts_stream"
-                )
-            apply_char_switch_from_assistant_text(
-                self, work, label="tts_stream"
-            )
-            apply_sleep_tag_from_assistant_text(
-                self, work, label="tts_stream"
-            )
-            self._dispatch_vol_from_assistant_text(
-                work, label="tts_stream", defer_post_tts=True
-            )
-            self._dispatch_tof_from_assistant_text(
-                work, label="tts_stream", defer_post_tts=True
-            )
-            self._dispatch_wx_from_assistant_text(
-                work, label="tts_stream", defer_post_tts=True
-            )
-        cleaned = strip_control_tags_for_tts(cleaned or "", trim_edges=False)
-
-        if cleaned:
-            self.tts.tts_text_queue.put(
-                TTSMessageDTO(
-                    sentence_id=sentence_id,
-                    sentence_type=SentenceType.MIDDLE,
-                    content_type=ContentType.TEXT,
-                    content_detail=cleaned,
-                )
-            )
 
     def _flush_direct_answer_move_hold(
         self, tc: dict, sentence_id: str | None, da_response: str
     ) -> None:
-        from core.utils.robot_move_codec import finalize_stream_text_for_tts
+        from core.utils.assistant_reply_tags import (
+            load_tag_hold_from_tc,
+            process_assistant_stream_chunk,
+            save_tag_hold_to_tc,
+        )
 
-        hold = tc.get("_da_move_hold", "") or ""
+        hold = load_tag_hold_from_tc(tc)
         parsed_len = tc.get("_da_parsed_len", 0)
         tail = da_response[parsed_len:] if da_response else ""
-        pending = hold + tail
-        tc["_da_move_hold"] = ""
         tc["_da_parsed_len"] = len(da_response or "")
-        if not pending:
+        if not tail and not hold.merged_prefix():
+            hold.clear()
+            save_tag_hold_to_tc(tc, hold)
             return
-        pending = self._clean_response_garbage(pending)
-        self._dispatch_vol_from_assistant_text(
-            pending, label="da_tail", defer_post_tts=True
+        tail = self._clean_response_garbage(tail)
+        spoken, hold, _ = process_assistant_stream_chunk(
+            self,
+            tail,
+            hold,
+            sentence_id=sentence_id,
+            label="da_tail",
+            flush=True,
+            default_mv_sec=self._robot_move_default_duration(),
+            max_mv_sec=self._robot_move_max_duration(),
+            allow_mv_inference=self._robot_move_allow_inference(),
+            apply_mem=True,
         )
-        self._dispatch_tof_from_assistant_text(
-            pending, label="da_tail", defer_post_tts=True
+        save_tag_hold_to_tc(tc, hold)
+        if not spoken:
+            return
+        self.tts.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=sentence_id,
+                sentence_type=SentenceType.MIDDLE,
+                content_type=ContentType.TEXT,
+                content_detail=spoken,
+            )
         )
-        tts_part, steps = finalize_stream_text_for_tts(
-            pending,
-            default_sec=self._robot_move_default_duration(),
-            max_sec=self._robot_move_max_duration(),
-            allow_inference=self._robot_move_allow_inference(),
-        )
-        if steps:
-            self._dispatch_robot_move_steps(
-                sentence_id, steps, defer_post_tts=True
-            )
-        elif tts_part:
-            self._dispatch_mv_from_assistant_text(
-                sentence_id, tts_part, label="da_tail", defer_post_tts=True
-            )
-        if tts_part:
-            from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
-
-            tts_part = strip_control_tags_for_tts(tts_part, trim_edges=True)
-            self.tts.tts_text_queue.put(
-                TTSMessageDTO(
-                    sentence_id=sentence_id,
-                    sentence_type=SentenceType.MIDDLE,
-                    content_type=ContentType.TEXT,
-                    content_detail=tts_part,
-                )
-            )
 
     def _inject_tool_call_fewshot(self):
         """注入工具调用 few-shot 示例到对话历史。
@@ -2634,53 +2527,33 @@ class ConnectionHandler:
                                 new_part = da_text[parsed_len:]
                                 new_part = self._clean_response_garbage(new_part)
                                 if new_part:
-                                    hold = tc.get("_da_move_hold", "") or ""
-                                    from core.utils.robot_move_codec import (
-                                        prepare_stream_chunk_for_tts,
+                                    from core.utils.assistant_reply_tags import (
+                                        load_tag_hold_from_tc,
+                                        process_assistant_stream_chunk,
+                                        save_tag_hold_to_tc,
                                     )
 
-                                    chunk = hold + new_part
-                                    safe, new_hold, steps = prepare_stream_chunk_for_tts(
-                                        chunk,
-                                        default_sec=self._robot_move_default_duration(),
-                                        max_sec=self._robot_move_max_duration(),
+                                    hold = load_tag_hold_from_tc(tc)
+                                    spoken, hold, _ = process_assistant_stream_chunk(
+                                        self,
+                                        new_part,
+                                        hold,
+                                        sentence_id=current_sentence_id,
+                                        label="da_stream",
+                                        flush=False,
+                                        default_mv_sec=self._robot_move_default_duration(),
+                                        max_mv_sec=self._robot_move_max_duration(),
+                                        apply_mem=False,
                                     )
-                                    tc["_da_move_hold"] = new_hold
                                     tc["_da_parsed_len"] = len(da_text)
-                                    self._dispatch_vol_from_assistant_text(
-                                        chunk, label="da_stream", defer_post_tts=True
-                                    )
-                                    self._dispatch_tof_from_assistant_text(
-                                        chunk, label="da_stream", defer_post_tts=True
-                                    )
-                                    if steps:
-                                        self._dispatch_robot_move_steps(
-                                            current_sentence_id,
-                                            steps,
-                                            defer_post_tts=True,
-                                        )
-                                    elif safe:
-                                        self._dispatch_mv_from_assistant_text(
-                                            current_sentence_id,
-                                            safe,
-                                            label="da_stream",
-                                            defer_post_tts=True,
-                                        )
-                                    if safe:
-                                        from core.utils.tts_tag_sanitize import (
-                                            strip_control_tags_for_tts,
-                                        )
-
-                                        safe = strip_control_tags_for_tts(
-                                            safe, trim_edges=False
-                                        )
-                                    if safe:
+                                    save_tag_hold_to_tc(tc, hold)
+                                    if spoken:
                                         self.tts.tts_text_queue.put(
                                             TTSMessageDTO(
                                                 sentence_id=current_sentence_id,
                                                 sentence_type=SentenceType.MIDDLE,
                                                 content_type=ContentType.TEXT,
-                                                content_detail=safe,
+                                                content_detail=spoken,
                                             )
                                         )
                 else:
