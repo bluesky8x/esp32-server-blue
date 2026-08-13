@@ -1,5 +1,6 @@
 import time
 import os
+import shutil
 import numpy as np
 import onnxruntime
 from config.logger import setup_logging
@@ -9,13 +10,36 @@ TAG = __name__
 logger = setup_logging()
 
 
+def _resolve_silero_model_path(model_dir: str) -> str:
+    """Prefer repo models/ tree; Docker images exclude models/ — seed from pip silero_vad."""
+    dest = os.path.join(model_dir, "src", "silero_vad", "data", "silero_vad.onnx")
+    if os.path.isfile(dest):
+        return dest
+
+    try:
+        from importlib.resources import as_file, files
+
+        ref = files("silero_vad.data").joinpath("silero_vad.onnx")
+        if not ref.is_file():
+            ref = files("silero_vad").joinpath("data", "silero_vad.onnx")
+        with as_file(ref) as src:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(src, dest)
+        logger.bind(tag=TAG).info(
+            f"SileroVAD model copied from pip package to {dest}"
+        )
+        return dest
+    except Exception as exc:
+        raise FileNotFoundError(
+            f"Silero VAD ONNX missing at {dest} and pip fallback failed: {exc}"
+        ) from exc
+
+
 class VADProvider(VADProviderBase):
     def __init__(self, config):
         logger.bind(tag=TAG).info("SileroVAD", config)
 
-        model_path = os.path.join(
-            config["model_dir"], "src", "silero_vad", "data", "silero_vad.onnx"
-        )
+        model_path = _resolve_silero_model_path(config["model_dir"])
         opts = onnxruntime.SessionOptions()
         opts.inter_op_num_threads = 1
         opts.intra_op_num_threads = 1
