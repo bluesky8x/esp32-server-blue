@@ -199,6 +199,83 @@ def _round_temp(value: float | int | None) -> int | None:
     return int(round(float(value)))
 
 
+def _round_one(value: float | int | None) -> float | int | None:
+    if value is None:
+        return None
+    v = float(value)
+    if abs(v) >= 10:
+        return int(round(v))
+    return round(v, 1)
+
+
+def _daily_value(daily: dict[str, Any], key: str, idx: int) -> Any:
+    values = daily.get(key) or []
+    if idx >= len(values):
+        return None
+    return values[idx]
+
+
+def _fmt_clock_time(iso_value: str | None) -> str | None:
+    if not iso_value:
+        return None
+    # Open-Meteo returns e.g. 2026-08-13T05:42 or full ISO
+    if "T" in iso_value:
+        return iso_value.split("T", 1)[1][:5]
+    return iso_value[:5] if len(iso_value) >= 5 else iso_value
+
+
+def _wind_compass(degrees: float | int | None) -> str | None:
+    if degrees is None:
+        return None
+    labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    idx = int((float(degrees) + 22.5) // 45) % 8
+    return labels[idx]
+
+
+def _build_current_payload(current: dict[str, Any]) -> dict[str, Any]:
+    code = current.get("weather_code", 0)
+    payload: dict[str, Any] = {
+        "temperature_c": _round_temp(current.get("temperature_2m")),
+        "feels_like_c": _round_temp(current.get("apparent_temperature")),
+        "humidity_pct": _round_one(current.get("relative_humidity_2m")),
+        "cloud_cover_pct": _round_one(current.get("cloud_cover")),
+        "wind_kmh": _round_one(current.get("wind_speed_10m")),
+        "wind_direction": _wind_compass(current.get("wind_direction_10m")),
+        "rain_mm": _round_one(current.get("rain")),
+        "precipitation_mm": _round_one(current.get("precipitation")),
+        "weather_code": code,
+        "condition": wmo_label(code, "en"),
+    }
+    return {k: v for k, v in payload.items() if v is not None}
+
+
+def _build_day_payload(daily: dict[str, Any], idx: int) -> dict[str, Any]:
+    code = _daily_value(daily, "weather_code", idx) or 0
+    payload: dict[str, Any] = {
+        "offset_days": idx,
+        "date": _daily_value(daily, "time", idx),
+        "condition": wmo_label(code, "en"),
+        "weather_code": code,
+        "high_c": _round_temp(_daily_value(daily, "temperature_2m_max", idx)),
+        "low_c": _round_temp(_daily_value(daily, "temperature_2m_min", idx)),
+        "feels_like_high_c": _round_temp(
+            _daily_value(daily, "apparent_temperature_max", idx)
+        ),
+        "feels_like_low_c": _round_temp(
+            _daily_value(daily, "apparent_temperature_min", idx)
+        ),
+        "rain_mm": _round_one(_daily_value(daily, "precipitation_sum", idx)),
+        "rain_chance_pct": _round_one(
+            _daily_value(daily, "precipitation_probability_max", idx)
+        ),
+        "wind_max_kmh": _round_one(_daily_value(daily, "wind_speed_10m_max", idx)),
+        "uv_index": _round_one(_daily_value(daily, "uv_index_max", idx)),
+        "sunrise": _fmt_clock_time(_daily_value(daily, "sunrise", idx)),
+        "sunset": _fmt_clock_time(_daily_value(daily, "sunset", idx)),
+    }
+    return {k: v for k, v in payload.items() if v is not None}
+
+
 async def geocode_place(
     name: str,
     *,
@@ -262,8 +339,17 @@ async def fetch_open_meteo_forecast(
     params = {
         "latitude": lat,
         "longitude": lon,
-        "current": "temperature_2m,weather_code",
-        "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+        "current": (
+            "temperature_2m,relative_humidity_2m,apparent_temperature,"
+            "precipitation,rain,wind_speed_10m,wind_direction_10m,"
+            "weather_code,cloud_cover"
+        ),
+        "daily": (
+            "weather_code,temperature_2m_max,temperature_2m_min,"
+            "apparent_temperature_max,apparent_temperature_min,"
+            "precipitation_sum,precipitation_probability_max,"
+            "uv_index_max,wind_speed_10m_max,sunrise,sunset"
+        ),
         "timezone": timezone or "auto",
         "forecast_days": 7,
     }
@@ -291,19 +377,8 @@ def build_weather_raw_payload(
     req = time_request or default_weather_request()
     current = forecast["current"]
     daily = forecast["daily"]
-    all_days: list[dict[str, Any]] = []
-    for idx, date in enumerate(daily.get("time") or []):
-        code = (daily.get("weather_code") or [0])[idx]
-        all_days.append(
-            {
-                "offset_days": idx,
-                "date": date,
-                "condition": wmo_label(code, "en"),
-                "weather_code": code,
-                "high_c": _round_temp((daily.get("temperature_2m_max") or [None])[idx]),
-                "low_c": _round_temp((daily.get("temperature_2m_min") or [None])[idx]),
-            }
-        )
+    day_count = len(daily.get("time") or [])
+    all_days = [_build_day_payload(daily, idx) for idx in range(day_count)]
 
     start = max(0, min(req.start_offset, len(all_days) - 1))
     end = max(start, min(req.end_offset, len(all_days) - 1))
@@ -319,11 +394,7 @@ def build_weather_raw_payload(
         "days": selected,
     }
     if req.include_current and req.start_offset == 0:
-        payload["current"] = {
-            "temperature_c": _round_temp(current.get("temperature_2m")),
-            "weather_code": current.get("weather_code"),
-            "condition": wmo_label(current.get("weather_code", 0), "en"),
-        }
+        payload["current"] = _build_current_payload(current)
     return payload
 
 
@@ -553,16 +624,18 @@ def _clean_llm_weather_reply(text: str) -> str:
 def _weather_naturalize_system_prompt(*, locale: str, character_name: str) -> str:
     language = {"en": "English", "vi": "Vietnamese"}.get(locale, "Vietnamese")
     return (
-        f"You are {character_name}, a warm voice assistant. "
-        f"Turn Open-Meteo weather JSON into ONE short natural {language} reply for text-to-speech.\n"
+        f"You are {character_name}, a warm, lively voice assistant. "
+        f"Turn Open-Meteo weather JSON into a natural {language} spoken forecast for text-to-speech.\n"
         "Rules:\n"
         "- Read requested_period — answer ONLY for that period (today / tomorrow / multi-day).\n"
-        "- If requested_period is tomorrow or a future day, do NOT describe current weather unless JSON includes \"current\".\n"
-        "- For multi-day ranges, summarize each day briefly (2-4 sentences total).\n"
-        "- Use ONLY facts from JSON (place, dates, temps, conditions in days[]).\n"
-        "- Do not invent numbers or conditions.\n"
-        "- No markdown, lists, emojis, or control tags (wx:, mv:, vol:, mem:).\n"
-        "- Speak temperatures naturally (e.g. Vietnamese: \"khoảng 34 độ\").\n"
+        "- If tomorrow or a future day, do NOT use current unless JSON includes \"current\".\n"
+        "- Single day: 3–5 short sentences. Multi-day: 1–2 sentences per day (max ~6 sentences).\n"
+        "- Pick the most useful extra details when present: feels_like, humidity, rain_chance_pct, "
+        "rain_mm, wind, uv_index, sunrise/sunset.\n"
+        "- Mention rain probability if rain_chance_pct >= 40. Mention feels_like if it differs a lot from temp.\n"
+        "- UV: warn gently if uv_index >= 8 (very high). Keep tone friendly, not alarmist.\n"
+        "- Use ONLY facts from JSON. Do not invent numbers.\n"
+        "- No markdown, bullet lists, emojis, or control tags (wx:, mv:, vol:, mem:).\n"
         "Reply with the spoken text only."
     )
 
@@ -602,7 +675,7 @@ async def naturalize_weather_speech(
                 lambda: llm.response_no_stream(
                     system_prompt,
                     user_prompt,
-                    max_tokens=220,
+                    max_tokens=300,
                     temperature=0.35,
                 ),
             )
