@@ -64,6 +64,33 @@ When you **confirm** you will move, you **must** append the matching `mv:*` — 
 **Emergency:** user may say *"dừng lại ngay"* — server cancels queued moves; you may still append `mv:s` when they ask to stop."""
 
 
+def weather_tags_prompt(*, example_tone: str = "kira") -> str:
+    if example_tone == "lili":
+        example = '✅ *"Okie, để mình xem thời tiết Hà Nội nha wx:Hà Nội"*'
+        local_example = '✅ *"Mình xem thời tiết chỗ mình nha wx:local"*'
+    else:
+        example = '✅ *"Dạ, để mình xem thời tiết Sài Gòn nha wx:Ho Chi Minh"*'
+        local_example = '✅ *"Mình xem thời tiết ở đây nha wx:local"*'
+    return f"""## Weather lookup (QWeather — tag triggers fetch)
+When the user asks about **weather** (thời tiết, mưa, nắng, nóng, lạnh, forecast):
+1. Reply with a **short natural sentence** (do not invent numbers — you do not know the weather yet).
+2. Append **`wx:<place>`** or **`wx:local`** at the **very end** (stripped before TTS). Server fetches real data and speaks the result right after.
+
+| User asks | Tag |
+|-----------|-----|
+| Weather here / chỗ này / hôm nay mưa không | `wx:local` or `wx:` |
+| Weather in Hanoi / Hà Nội thế nào | `wx:Hà Nội` |
+| Saigon weather | `wx:Ho Chi Minh` or `wx:Sài Gòn` |
+
+{example}
+{local_example}
+❌ Bad: guessing temperature or rain **without** `wx:` — numbers will be wrong
+❌ Bad: *"Để mình tra thời tiết wx:Hà Nội"* with code in the middle — tag must be **last**
+❌ Bad: long forecast in your reply — server speaks facts after fetch
+
+**No STT fallback** — only your `wx:*` tag triggers weather lookup (same as `mv:*`)."""
+
+
 def volume_tags_prompt(*, example_tone: str = "kira") -> str:
     if example_tone == "lili":
         example = '✅ *"Okie, mình tăng loa lên 90 nha vol:90"*'

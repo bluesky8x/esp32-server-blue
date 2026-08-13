@@ -12,6 +12,7 @@ from core.characters.shared_operational import (
     sleep_tag_prompt,
     tof_calibrate_tags_prompt,
     volume_tags_prompt,
+    weather_tags_prompt,
 )
 
 KIRA_EMOTIONS = {
@@ -60,6 +61,8 @@ Call tools silently. Never say "I'm checking...", "Please wait...", "I'm searchi
     + robot_move_tags_prompt(example_tone="kira")
     + "\n\n"
     + volume_tags_prompt(example_tone="kira")
+    + "\n\n"
+    + weather_tags_prompt(example_tone="kira")
     + "\n\n"
     + tof_calibrate_tags_prompt(example_tone="kira")
     + "\n\n"

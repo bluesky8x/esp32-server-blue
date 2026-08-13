@@ -161,6 +161,100 @@ def parse_weather_info(soup):
     return city_name, current_abstract, current_basic, temps_list
 
 
+async def resolve_weather_location(
+    conn: "ConnectionHandler", location: str | None
+) -> str:
+    from core.utils.cache.manager import cache_manager, CacheType
+
+    weather_config = conn.config.get("plugins", {}).get("get_weather", {})
+    default_location = weather_config.get("default_location", "广州")
+    client_ip = conn.client_ip
+
+    if location and str(location).strip():
+        return str(location).strip()
+
+    if client_ip:
+        cached_ip_info = cache_manager.get(CacheType.IP_INFO, client_ip)
+        if cached_ip_info:
+            city = cached_ip_info.get("city")
+            if city:
+                return city
+        ip_info = get_ip_info(client_ip, logger)
+        if ip_info:
+            cache_manager.set(CacheType.IP_INFO, client_ip, ip_info)
+            city = ip_info.get("city")
+            if city:
+                return city
+    return default_location
+
+
+def format_weather_speech(
+    *,
+    city_name: str,
+    current_abstract: str,
+    temps_list: list,
+    locale: str = "vi",
+    requested_location: str | None = None,
+) -> str:
+    display_city = (requested_location or city_name or "").strip() or city_name
+    today = temps_list[0] if temps_list else None
+    if locale == "en":
+        if today:
+            _date, weather, high, low = today
+            return (
+                f"{display_city}: now {current_abstract}. "
+                f"Today {weather}, {low} to {high}."
+            )
+        return f"{display_city}: {current_abstract}."
+
+    if today:
+        _date, weather, high, low = today
+        return (
+            f"{display_city}: hiện {current_abstract}. "
+            f"Hôm nay {weather}, {low} đến {high} độ."
+        )
+    return f"{display_city}: hiện {current_abstract}."
+
+
+async def fetch_weather_speech(
+    conn: "ConnectionHandler",
+    location: str | None = None,
+    *,
+    locale: str = "vi",
+) -> str | None:
+    """Fetch weather for wx: tag dispatch. Returns TTS-ready text or None on failure."""
+    from core.utils.cache.manager import cache_manager, CacheType
+
+    weather_config = conn.config.get("plugins", {}).get("get_weather", {})
+    api_host = weather_config.get("api_host", "mj7p3y7naa.re.qweatherapi.com")
+    api_key = weather_config.get("api_key", "a861d0d5e7bf4ee1a83d9a9e4f96d4da")
+    requested = (location or "").strip() or None
+    resolved = await resolve_weather_location(conn, requested)
+    lang = "en_US" if locale == "en" else "zh_CN"
+
+    weather_cache_key = f"speech_{resolved}_{locale}"
+    cached = cache_manager.get(CacheType.WEATHER, weather_cache_key)
+    if cached:
+        return cached
+
+    city_info = await fetch_city_info(resolved, api_key, api_host)
+    if not city_info:
+        return None
+    soup = await fetch_weather_page(city_info["fxLink"])
+    if not soup:
+        return None
+    city_name, current_abstract, _current_basic, temps_list = parse_weather_info(soup)
+    speech = format_weather_speech(
+        city_name=city_name,
+        current_abstract=current_abstract,
+        temps_list=temps_list,
+        locale=locale,
+        requested_location=requested,
+    )
+    cache_manager.set(CacheType.WEATHER, weather_cache_key, speech)
+    return speech
+
+
 @register_function("get_weather", GET_WEATHER_FUNCTION_DESC, ToolType.SYSTEM_CTL)
 async def get_weather(conn: "ConnectionHandler", location: str = None, lang: str = "zh_CN"):
     from core.utils.cache.manager import cache_manager, CacheType
@@ -168,40 +262,16 @@ async def get_weather(conn: "ConnectionHandler", location: str = None, lang: str
     weather_config = conn.config.get("plugins", {}).get("get_weather", {})
     api_host = weather_config.get("api_host", "mj7p3y7naa.re.qweatherapi.com")
     api_key = weather_config.get("api_key", "a861d0d5e7bf4ee1a83d9a9e4f96d4da")
-    default_location = weather_config.get("default_location", "广州")
-    client_ip = conn.client_ip
-
-    # 优先使用用户提供的location参数
-    if not location:
-        # 通过客户端IP解析城市
-        if client_ip:
-            # 先从缓存获取IP对应的城市信息
-            cached_ip_info = cache_manager.get(CacheType.IP_INFO, client_ip)
-            if cached_ip_info:
-                location = cached_ip_info.get("city")
-            else:
-                # 缓存未命中，调用API获取
-                ip_info = get_ip_info(client_ip, logger)
-                if ip_info:
-                    cache_manager.set(CacheType.IP_INFO, client_ip, ip_info)
-                    location = ip_info.get("city")
-
-            if not location:
-                location = default_location
-        else:
-            # 若无IP，使用默认位置
-            location = default_location
-    # 尝试从缓存获取完整天气报告
-    weather_cache_key = f"full_weather_{location}_{lang}"
+    resolved = await resolve_weather_location(conn, location)
+    weather_cache_key = f"full_weather_{resolved}_{lang}"
     cached_weather_report = cache_manager.get(CacheType.WEATHER, weather_cache_key)
     if cached_weather_report:
         return ActionResponse(Action.REQLLM, cached_weather_report, None)
 
-    # 缓存未命中，获取实时天气数据
-    city_info = await fetch_city_info(location, api_key, api_host)
+    city_info = await fetch_city_info(resolved, api_key, api_host)
     if not city_info:
         return ActionResponse(
-            Action.REQLLM, f"未找到相关的城市: {location}，请确认地点是否正确", None
+            Action.REQLLM, f"未找到相关的城市: {resolved}，请确认地点是否正确", None
         )
     soup = await fetch_weather_page(city_info["fxLink"])
     if not soup:

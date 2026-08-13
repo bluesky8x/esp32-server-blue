@@ -1038,6 +1038,80 @@ class ConnectionHandler:
         )
         future.add_done_callback(_on_tof_done)
 
+    def _dispatch_weather_lookup(
+        self, location: str | None, *, label: str = ""
+    ) -> None:
+        if not getattr(self, "loop", None):
+            self.logger.bind(tag=TAG).warning("[wx] skip — event loop missing")
+            return
+
+        loc_key = "" if location is None else str(location)
+        dedupe_key = (label or "assistant", loc_key)
+        if not hasattr(self, "_executed_weather_lookups"):
+            self._executed_weather_lookups = set()
+        if dedupe_key in self._executed_weather_lookups:
+            self.logger.bind(tag=TAG).debug(
+                f"[wx] skip duplicate wx:{loc_key or 'local'} label={label}"
+            )
+            return
+        self._executed_weather_lookups.add(dedupe_key)
+
+        locale = getattr(self, "active_locale", "vi") or "vi"
+        place_label = loc_key or "local"
+        self.logger.bind(tag=TAG).info(
+            f"[wx] dispatch wx:{place_label} label={label} locale={locale}"
+        )
+
+        async def _fetch_and_speak():
+            from core.utils.wake_greeting import speak_greeting_txt
+            from plugins_func.functions.get_weather import fetch_weather_speech
+
+            import uuid
+
+            try:
+                text = await fetch_weather_speech(
+                    self,
+                    loc_key or None,
+                    locale=locale,
+                )
+            except Exception as exc:
+                self.logger.bind(tag=TAG).error(f"[wx] fetch failed: {exc}")
+                text = None
+            if not text:
+                text = (
+                    "Mình chưa lấy được thời tiết, thử lại sau nha."
+                    if locale != "en"
+                    else "I couldn't fetch the weather. Please try again."
+                )
+            self.logger.bind(tag=TAG).info(f"[wx] result: {text[:160]}")
+            self.sentence_id = str(uuid.uuid4().hex)
+            speak_greeting_txt(self, text)
+
+        asyncio.run_coroutine_threadsafe(_fetch_and_speak(), self.loop)
+
+    def _dispatch_wx_from_assistant_text(
+        self, text: str, *, label: str = "", defer_post_tts: bool = False
+    ) -> bool:
+        from core.utils.weather_tag_codec import (
+            extract_weather_location_from_assistant_text,
+        )
+
+        if not text:
+            return False
+        location = extract_weather_location_from_assistant_text(text)
+        if location is None:
+            return False
+        if defer_post_tts:
+            self._schedule_post_tts_action(
+                f"wx:{label or 'assistant'}",
+                lambda loc=location, l=label: self._dispatch_weather_lookup(
+                    loc, label=l or "assistant"
+                ),
+            )
+            return True
+        self._dispatch_weather_lookup(location, label=label or "assistant")
+        return True
+
     def _dispatch_tof_from_assistant_text(
         self, text: str, *, label: str = "", defer_post_tts: bool = False
     ) -> bool:
@@ -1557,6 +1631,7 @@ class ConnectionHandler:
         from core.utils.robot_move_codec import split_robot_move_tags
         from core.utils.volume_tag_codec import strip_vol_tags
         from core.utils.tof_tag_codec import strip_tof_tags
+        from core.utils.weather_tag_codec import strip_wx_tags
 
         if not text:
             return ""
@@ -1575,8 +1650,12 @@ class ConnectionHandler:
         self._dispatch_tof_from_assistant_text(
             text, label="prepare_llm_text_for_tts", defer_post_tts=True
         )
+        self._dispatch_wx_from_assistant_text(
+            text, label="prepare_llm_text_for_tts", defer_post_tts=True
+        )
         cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
         cleaned = strip_tof_tags(cleaned, trim_edges=trim_edges)
+        cleaned = strip_wx_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_vol_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_mem_tags(cleaned, trim_edges=trim_edges)
         cleaned = strip_char_tags(cleaned, trim_edges=trim_edges)
@@ -1611,6 +1690,7 @@ class ConnectionHandler:
         )
         from core.utils.volume_tag_codec import strip_vol_tags
         from core.utils.tof_tag_codec import strip_tof_tags
+        from core.utils.weather_tag_codec import strip_wx_tags
 
         if flush_hold:
             held_mv = getattr(self, "_move_tag_stream_hold", "") or ""
@@ -1680,7 +1760,11 @@ class ConnectionHandler:
             self._dispatch_tof_from_assistant_text(
                 work, label="tts_stream", defer_post_tts=True
             )
+            self._dispatch_wx_from_assistant_text(
+                work, label="tts_stream", defer_post_tts=True
+            )
         cleaned = strip_tof_tags(cleaned or "", trim_edges=False)
+        cleaned = strip_wx_tags(cleaned or "", trim_edges=False)
         cleaned = strip_vol_tags(cleaned or "", trim_edges=False)
         cleaned = strip_mem_tags(cleaned or "", trim_edges=False)
         cleaned = strip_char_tags(cleaned or "", trim_edges=False)
@@ -1710,6 +1794,15 @@ class ConnectionHandler:
         if not pending:
             return
         pending = self._clean_response_garbage(pending)
+        self._dispatch_vol_from_assistant_text(
+            pending, label="da_tail", defer_post_tts=True
+        )
+        self._dispatch_tof_from_assistant_text(
+            pending, label="da_tail", defer_post_tts=True
+        )
+        self._dispatch_wx_from_assistant_text(
+            pending, label="da_tail", defer_post_tts=True
+        )
         tts_part, steps = finalize_stream_text_for_tts(
             pending,
             default_sec=self._robot_move_default_duration(),
@@ -1725,6 +1818,14 @@ class ConnectionHandler:
                 sentence_id, tts_part, label="da_tail", defer_post_tts=True
             )
         if tts_part:
+            from core.utils.tof_tag_codec import strip_tof_tags
+            from core.utils.volume_tag_codec import strip_vol_tags
+            from core.utils.weather_tag_codec import strip_wx_tags
+
+            tts_part = strip_wx_tags(
+                strip_tof_tags(strip_vol_tags(tts_part, trim_edges=False), trim_edges=False),
+                trim_edges=True,
+            )
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=sentence_id,
@@ -2286,6 +2387,7 @@ class ConnectionHandler:
             current_sentence_id = str(uuid.uuid4().hex)
             self.sentence_id = current_sentence_id  # 更新共享属性
             self._executed_robot_moves = set()
+            self._executed_weather_lookups = set()
             self._move_tag_stream_hold = ""
             self._char_tag_stream_hold = ""
             self._mem_tag_stream_hold = ""
@@ -2434,6 +2536,15 @@ class ConnectionHandler:
                                     )
                                     tc["_da_move_hold"] = new_hold
                                     tc["_da_parsed_len"] = len(da_text)
+                                    self._dispatch_vol_from_assistant_text(
+                                        chunk, label="da_stream", defer_post_tts=True
+                                    )
+                                    self._dispatch_tof_from_assistant_text(
+                                        chunk, label="da_stream", defer_post_tts=True
+                                    )
+                                    self._dispatch_wx_from_assistant_text(
+                                        chunk, label="da_stream", defer_post_tts=True
+                                    )
                                     if steps:
                                         self._dispatch_robot_move_steps(
                                             current_sentence_id,
@@ -2446,6 +2557,18 @@ class ConnectionHandler:
                                             safe,
                                             label="da_stream",
                                             defer_post_tts=True,
+                                        )
+                                    if safe:
+                                        from core.utils.tof_tag_codec import strip_tof_tags
+                                        from core.utils.volume_tag_codec import strip_vol_tags
+                                        from core.utils.weather_tag_codec import strip_wx_tags
+
+                                        safe = strip_wx_tags(
+                                            strip_tof_tags(
+                                                strip_vol_tags(safe, trim_edges=False),
+                                                trim_edges=False,
+                                            ),
+                                            trim_edges=False,
                                         )
                                     if safe:
                                         self.tts.tts_text_queue.put(
