@@ -65,6 +65,8 @@ tts_timeout: 30
 # tts_chunk_max_chars: 160
 # tts_chunk_max_words: 35
 # tts_max_retries: 2
+# Level-1 tts stop: wait for send queue drain only (device handles playback)
+# tts_transmission_wait_timeout: 180
 
 # --- Weather (Open-Meteo — free, no API key; AI wx: tag triggers fetch after TTS) ---
 # Docs: https://open-meteo.com/en/docs

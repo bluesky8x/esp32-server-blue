@@ -87,27 +87,33 @@ async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text
             await conn.close()
 
 
-async def _wait_for_audio_completion(conn: "ConnectionHandler"):
+async def _wait_for_audio_transmission_complete(conn: "ConnectionHandler") -> None:
     """
-    等待音频队列清空并等待预缓冲包播放完成
-
-    Args:
-        conn: 连接对象
+    Level-1 tts stop: wait until every opus packet has been sent over the wire.
+    Device firmware drains its playback queue and enables the mic (pending_listening_start).
     """
-    if hasattr(conn, "audio_rate_controller") and conn.audio_rate_controller:
-        rate_controller = conn.audio_rate_controller
+    rc = getattr(conn, "audio_rate_controller", None)
+    if not rc:
+        return
+    pending = len(rc.queue)
+    if pending:
         conn.logger.bind(tag=TAG).debug(
-            f"等待音频发送完成，队列中还有 {len(rate_controller.queue)} 个包"
+            f"等待音频发送完成，队列中还有 {pending} 个包"
         )
-        await rate_controller.queue_empty_event.wait()
+    await rc.queue_empty_event.wait()
+    # Allow the last in-flight websocket write to finish
+    await asyncio.sleep(0.05)
+    conn.logger.bind(tag=TAG).debug("音频包已全部发送")
 
-        # 等待预缓冲包播放完成
-        # 前N个包直接发送，增加2个网络抖动包，需要额外等待它们在客户端播放完成
-        frame_duration_ms = rate_controller.frame_duration
-        pre_buffer_playback_time = (PRE_BUFFER_COUNT + 2) * frame_duration_ms / 1000.0
-        await asyncio.sleep(pre_buffer_playback_time)
 
-        conn.logger.bind(tag=TAG).debug("音频发送完成")
+def _tts_transmission_wait_timeout(conn: "ConnectionHandler") -> float:
+    """Upper bound while waiting for the rate-limited send queue to drain."""
+    base = float((conn.config or {}).get("tts_transmission_wait_timeout", 180))
+    rc = getattr(conn, "audio_rate_controller", None)
+    if not rc:
+        return base
+    pending_ms = len(rc.queue) * rc.frame_duration
+    return max(base, pending_ms / 1000.0 + 10.0)
 
 
 async def _send_to_mqtt_gateway(
@@ -316,9 +322,8 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
     if text is not None:
         message["text"] = textUtils.check_emoji(text)
 
-    # TTS播放结束
+    # TTS end — stop means "no more packets", not "speaker finished" (device drains playback).
     if state == "stop":
-        # 保存当前的 sentence_id，用于后续判断是否是当前轮次
         current_sentence_id = conn.sentence_id
 
         tts_notify = conn.config.get("enable_stop_tts_notify", False)
@@ -329,14 +334,21 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
             audios = await audio_to_data(stop_tts_notify_voice, is_opus=True)
             await sendAudio(conn, audios)
 
-        # Wait until all audio packets are sent before tts stop — otherwise the
-        # device leaves speaking while the speaker is still playing (mic echo).
+        tx_timeout = _tts_transmission_wait_timeout(conn)
         try:
-            await asyncio.wait_for(_wait_for_audio_completion(conn), timeout=15.0)
-        except asyncio.TimeoutError:
-            conn.logger.bind(tag=TAG).warning(
-                "Timed out waiting for audio completion on tts stop"
+            await asyncio.wait_for(
+                _wait_for_audio_transmission_complete(conn), timeout=tx_timeout
             )
+        except asyncio.TimeoutError:
+            rc = getattr(conn, "audio_rate_controller", None)
+            pending = len(rc.queue) if rc else 0
+            conn.logger.bind(tag=TAG).warning(
+                f"Transmission wait slow ({tx_timeout:.0f}s), "
+                f"still pending {pending} packets — waiting (no cancel)"
+            )
+            if rc and pending:
+                await rc.queue_empty_event.wait()
+                await asyncio.sleep(0.05)
 
         conn.clearSpeakStatus()
         conn.reset_audio_states()
@@ -345,8 +357,15 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
             await conn.websocket.send(json.dumps(message))
             return
 
+        # Only stop the sender after all packets were transmitted (never truncate queue).
         if hasattr(conn, "audio_rate_controller") and conn.audio_rate_controller:
-            conn.audio_rate_controller.stop_sending()
+            rc = conn.audio_rate_controller
+            if len(rc.queue) == 0:
+                rc.stop_sending()
+            else:
+                conn.logger.bind(tag=TAG).warning(
+                    f"Skip stop_sending — {len(rc.queue)} packets still queued"
+                )
 
         await conn.websocket.send(json.dumps(message))
 

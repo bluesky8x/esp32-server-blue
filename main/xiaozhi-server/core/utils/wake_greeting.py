@@ -145,11 +145,18 @@ def _begin_greeting_tts(conn: "ConnectionHandler") -> None:
 
 
 def speak_greeting_txt(conn: "ConnectionHandler", text: str) -> None:
-    """Queue greeting TTS; long text is chunked on LAST (not during streaming)."""
+    """Queue greeting/wx TTS; long text split into size-safe chunks before synthesis."""
     from core.utils.dialogue import Message
+    from core.utils.tts_chunk import split_text_for_tts
     from core.providers.tts.dto.dto import ContentType, SentenceType, TTSMessageDTO
 
     spoken = _greeting_tts_text(text)
+    cfg = getattr(conn, "config", {}) or {}
+    max_chars = int(cfg.get("tts_chunk_max_chars", 160))
+    max_words = int(cfg.get("tts_chunk_max_words", 35))
+    chunks = split_text_for_tts(spoken, max_chars=max_chars, max_words=max_words)
+    if not chunks:
+        chunks = [spoken] if spoken else []
 
     conn.tts.store_tts_text(conn.sentence_id, text)
     conn.tts.tts_text_queue.put(
@@ -159,14 +166,15 @@ def speak_greeting_txt(conn: "ConnectionHandler", text: str) -> None:
             content_type=ContentType.ACTION,
         )
     )
-    conn.tts.tts_text_queue.put(
-        TTSMessageDTO(
-            sentence_id=conn.sentence_id,
-            sentence_type=SentenceType.MIDDLE,
-            content_type=ContentType.TEXT,
-            content_detail=spoken,
+    for chunk in chunks:
+        conn.tts.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=conn.sentence_id,
+                sentence_type=SentenceType.MIDDLE,
+                content_type=ContentType.TEXT,
+                content_detail=chunk,
+            )
         )
-    )
     conn.tts.tts_text_queue.put(
         TTSMessageDTO(
             sentence_id=conn.sentence_id,
