@@ -108,6 +108,18 @@ class TTSProviderBase(ABC):
         self.tts_stop_request = False
         self.processed_chars = 0
         self.is_first_sentence = True
+        self._sentence_audio_started = False
+
+    def _push_tts_audio_frame(self, data, original_text):
+        """Emit FIRST once per assistant sentence; later frames are MIDDLE."""
+        sid = getattr(self, "current_sentence_id", None)
+        if not getattr(self, "_sentence_audio_started", False):
+            self.tts_audio_queue.put(
+                (SentenceType.FIRST, data, original_text, sid)
+            )
+            self._sentence_audio_started = True
+        else:
+            self.handle_opus(data)
 
     def generate_filename(self, extension=".wav"):
         return os.path.join(
@@ -178,18 +190,8 @@ class TTSProviderBase(ABC):
                 try:
                     audio_bytes = asyncio.run(self.text_to_speak(text, None))
                     if audio_bytes:
-                        sent_start = False
-
                         def opus_handler(data):
-                            nonlocal sent_start
-                            sid = getattr(self, "current_sentence_id", None)
-                            if not sent_start:
-                                self.tts_audio_queue.put(
-                                    (SentenceType.FIRST, data, original_text, sid)
-                                )
-                                sent_start = True
-                            else:
-                                self.handle_opus(data)
+                            self._push_tts_audio_frame(data, original_text)
 
                         audio_bytes_to_data_stream(
                             audio_bytes,
@@ -239,18 +241,9 @@ class TTSProviderBase(ABC):
                     logger.bind(tag=TAG).error(
                         f"语音生成失败: {original_text}，请检查网络或服务是否正常"
                     )
-                sent_start = False
 
                 def opus_handler(data):
-                    nonlocal sent_start
-                    sid = getattr(self, "current_sentence_id", None)
-                    if not sent_start:
-                        self.tts_audio_queue.put(
-                            (SentenceType.FIRST, data, original_text, sid)
-                        )
-                        sent_start = True
-                    else:
-                        self.handle_opus(data)
+                    self._push_tts_audio_frame(data, original_text)
 
                 self._process_audio_file_stream(tmp_file, callback=opus_handler)
             except Exception as e:
@@ -358,24 +351,16 @@ class TTSProviderBase(ABC):
             else:
                 sentence_id = str(uuid.uuid4().hex)
                 conn.sentence_id = sentence_id
-        # 对于单句的文本，进行分段处理
-        cfg = getattr(conn, "config", {}) or {}
-        max_chars = int(cfg.get("tts_chunk_max_chars", 160))
-        max_words = int(cfg.get("tts_chunk_max_words", 35))
-        from core.utils.tts_chunk import split_text_for_tts
-
-        for chunk in split_text_for_tts(
-            content_detail or "", max_chars=max_chars, max_words=max_words
-        ):
-            self.tts_text_queue.put(
-                TTSMessageDTO(
-                    sentence_id=sentence_id,
-                    sentence_type=SentenceType.MIDDLE,
-                    content_type=content_type,
-                    content_detail=chunk,
-                    content_file=content_file,
-                )
+        # 对于单句的文本，整段入队；长文本在 LAST 时由 _process_remaining_text_stream 分块
+        self.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=sentence_id,
+                sentence_type=SentenceType.MIDDLE,
+                content_type=content_type,
+                content_detail=content_detail,
+                content_file=content_file,
             )
+        )
 
     async def open_audio_channels(self, conn):
         self.conn = conn
@@ -466,6 +451,7 @@ class TTSProviderBase(ABC):
                     self.tts_text_buff = []
                     self.is_first_sentence = True
                     self.tts_audio_first_sentence = True
+                    self._sentence_audio_started = False
                 elif ContentType.TEXT == message.content_type:
                     detail = self._sanitize_tts_text(
                         message.content_detail or "", message.sentence_id
@@ -582,47 +568,41 @@ class TTSProviderBase(ABC):
         )
 
     def _get_segment_text(self):
-        from core.utils.tts_chunk import take_tts_prefix
-
+        # 流式：只在完整标点处切句，不按字数硬切（避免说一半就断、丢字）
         full_text = "".join(self.tts_text_buff)
         current_text = full_text[self.processed_chars :]
-        if not current_text.strip() and not self.tts_stop_request:
-            return None
+        last_punct_pos = -1
 
-        max_chars, max_words = self._tts_chunk_limits()
-        puncs = tuple(
+        punctuations_to_use = (
             self.first_sentence_punctuations
             if self.is_first_sentence
             else self.punctuations
         )
 
-        prefix, _ = take_tts_prefix(
-            current_text.strip(),
-            max_chars=max_chars,
-            max_words=max_words,
-            punctuations=puncs,
-            first_sentence=self.is_first_sentence,
-        )
-        if not prefix:
-            return None
+        for punct in punctuations_to_use:
+            pos = current_text.rfind(punct)
+            if (pos != -1 and last_punct_pos == -1) or (
+                pos != -1 and pos < last_punct_pos
+            ):
+                last_punct_pos = pos
 
-        stripped = current_text.lstrip()
-        lead = len(current_text) - len(stripped)
-        pos = stripped.find(prefix)
-        if pos == -1:
-            pos = 0
-        consumed = lead + pos + len(prefix)
-        while consumed < len(current_text) and current_text[consumed].isspace():
-            consumed += 1
-
-        spoken = self._sanitize_tts_text(
-            prefix, getattr(self, "current_sentence_id", None)
-        )
-        segment_text = textUtils.get_string_no_punctuation_or_emoji(spoken)
-        self.processed_chars += consumed
-        if self.is_first_sentence:
-            self.is_first_sentence = False
-        return segment_text or None
+        if last_punct_pos != -1:
+            raw_slice = current_text[: last_punct_pos + 1]
+            spoken = self._sanitize_tts_text(
+                raw_slice, getattr(self, "current_sentence_id", None)
+            )
+            segment_text = textUtils.get_string_no_punctuation_or_emoji(spoken)
+            self.processed_chars += len(raw_slice)
+            if self.is_first_sentence:
+                self.is_first_sentence = False
+            return segment_text or None
+        if self.tts_stop_request and current_text:
+            segment_text = self._sanitize_tts_text(
+                current_text, getattr(self, "current_sentence_id", None)
+            )
+            self.is_first_sentence = True
+            return textUtils.get_string_no_punctuation_or_emoji(segment_text) or None
+        return None
 
     def _process_audio_file_stream(
         self, tts_file, callback: Callable[[Any], Any]
