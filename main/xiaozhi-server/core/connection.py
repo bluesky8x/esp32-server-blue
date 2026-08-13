@@ -1770,6 +1770,11 @@ class ConnectionHandler:
     ) -> None:
         if not text or not str(text).strip():
             return
+        from core.utils.textUtils import strip_unwanted_scripts_for_tts
+
+        text = strip_unwanted_scripts_for_tts(str(text))
+        if not text.strip():
+            return
         self.tts.tts_text_queue.put(
             TTSMessageDTO(
                 sentence_id=sentence_id,
@@ -1896,8 +1901,8 @@ class ConnectionHandler:
     def _inject_direct_answer_fewshot_vi(self, tool_names: set) -> None:
         """Vietnamese direct_answer + tag few-shot examples."""
         self._put_direct_answer_fewshot(
-            "给我讲个故事吧",
-            "好呀，你想听什么类型的呀？童话、冒险还是搞笑的？选一个我给你开讲~",
+            "Kể chuyện đi",
+            "Dạ, bạn muốn nghe truyện cổ tích, phiêu lưu hay hài nhi?",
             "fewshot_da_001",
         )
         self._put_direct_answer_fewshot(
@@ -3291,6 +3296,11 @@ class ConnectionHandler:
         result = '\n'.join(cleaned)
         # 清理末尾残留的 JSON 闭合符号
         result = re.sub(r'["\'}\]]+$', '', result.rstrip()).rstrip()
+        from core.utils.textUtils import strip_unwanted_scripts_for_tts
+
+        result = strip_unwanted_scripts_for_tts(result)
+        # Strip leaked tool-call / markup fragments (can confuse TTS if spoken).
+        result = re.sub(r"<tool_call>.*", "", result, flags=re.IGNORECASE | re.DOTALL)
         return result
 
     def _merge_tool_calls(self, tool_calls_list, tools_call):

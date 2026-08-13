@@ -78,6 +78,7 @@ class TTSProviderBase(ABC):
 
         # 流式滑动窗口：待匹配的缓存文本
         self._pending_prefix = ""
+        self._tts_short_segment_hold = ""
         self.tts_text_buff = []
         self.punctuations = (
             "。",
@@ -168,9 +169,23 @@ class TTSProviderBase(ABC):
     def _normalize_tts_text(self, text: str) -> str:
         if not text:
             return ""
+        text = textUtils.strip_unwanted_scripts_for_tts(text)
         if getattr(self.conn, "normalize_vietnamese_tts", True):
             return textUtils.normalize_vietnamese_tts_text(text)
         return text
+
+    def _min_tts_segment_chars(self) -> int:
+        cfg = getattr(self.conn, "config", {}) or {}
+        try:
+            return max(4, int(cfg.get("tts_min_segment_chars", 12)))
+        except (TypeError, ValueError):
+            return 12
+
+    def _min_first_segment_chars(self) -> int:
+        return self._min_tts_segment_chars()
+
+    def _is_strong_sentence_punct(self, ch: str) -> bool:
+        return ch in ("。", ".", "？", "?", "！", "!", "；", ";", "：")
 
     def _prepare_tts_queue_text(self, text: str, *, tags_sanitized: bool = False) -> str:
         """Prepare text once when entering the TTS queue (not again at segment/TTS time)."""
@@ -182,6 +197,7 @@ class TTSProviderBase(ABC):
 
     def to_tts_stream(self, text, opus_handler: Callable[[bytes], None] = None) -> None:
         # 保留原始文本用于显示/上报（queue/buff 已在入队时 sanitize）
+        text = textUtils.strip_unwanted_scripts_for_tts(text or "")
         if not text or not text.strip():
             return
         original_text = text
@@ -467,6 +483,7 @@ class TTSProviderBase(ABC):
                     self.tts_stop_request = False
                     self.processed_chars = 0
                     self.tts_text_buff = []
+                    self._tts_short_segment_hold = ""
                     self.is_first_sentence = True
                     self.tts_audio_first_sentence = True
                     self._sentence_audio_started = False
@@ -590,7 +607,8 @@ class TTSProviderBase(ABC):
         # 流式：只在完整标点处切句，不按字数硬切（避免说一半就断、丢字）
         full_text = "".join(self.tts_text_buff)
         current_text = full_text[self.processed_chars :]
-        last_punct_pos = -1
+        if not current_text.strip():
+            return None
 
         punctuations_to_use = (
             self.first_sentence_punctuations
@@ -598,25 +616,53 @@ class TTSProviderBase(ABC):
             else self.punctuations
         )
 
+        min_seg = self._min_tts_segment_chars()
+        best_pos = -1
         for punct in punctuations_to_use:
             pos = current_text.rfind(punct)
-            if (pos != -1 and last_punct_pos == -1) or (
-                pos != -1 and pos < last_punct_pos
-            ):
-                last_punct_pos = pos
+            if pos == -1:
+                continue
+            raw_slice = current_text[: pos + 1]
+            spoken = textUtils.get_string_no_punctuation_or_emoji(raw_slice)
+            if not self._is_strong_sentence_punct(punct):
+                if spoken and textUtils.is_tts_segment_too_short(spoken, min_seg):
+                    continue
+            if best_pos == -1 or pos < best_pos:
+                best_pos = pos
 
-        if last_punct_pos != -1:
-            raw_slice = current_text[: last_punct_pos + 1]
+        if best_pos != -1:
+            raw_slice = current_text[: best_pos + 1]
             segment_text = textUtils.get_string_no_punctuation_or_emoji(raw_slice)
             self.processed_chars += len(raw_slice)
             if self.is_first_sentence:
                 self.is_first_sentence = False
-            return segment_text or None
+            return self._finalize_segment_text(segment_text, flush=False)
         if self.tts_stop_request and current_text:
             segment_text = textUtils.get_string_no_punctuation_or_emoji(current_text)
             self.is_first_sentence = True
-            return segment_text or None
+            return self._finalize_segment_text(segment_text, flush=True)
         return None
+
+    def _finalize_segment_text(
+        self, segment_text: str | None, *, flush: bool = False
+    ) -> str | None:
+        if not segment_text or not segment_text.strip():
+            return None
+        min_seg = self._min_tts_segment_chars()
+        hold = getattr(self, "_tts_short_segment_hold", "") or ""
+        if hold:
+            segment_text = textUtils.join_stream_text_chunks(hold, segment_text)
+            self._tts_short_segment_hold = ""
+        if (
+            not flush
+            and textUtils.is_tts_segment_too_short(segment_text, min_seg)
+        ):
+            self._tts_short_segment_hold = textUtils.join_stream_text_chunks(
+                getattr(self, "_tts_short_segment_hold", "") or "",
+                segment_text,
+            )
+            return None
+        return segment_text or None
 
     def _process_audio_file_stream(
         self, tts_file, callback: Callable[[Any], Any]
@@ -656,6 +702,10 @@ class TTSProviderBase(ABC):
 
         full_text = "".join(self.tts_text_buff)
         remaining_text = full_text[self.processed_chars :]
+        hold = getattr(self, "_tts_short_segment_hold", "") or ""
+        if hold:
+            remaining_text = textUtils.join_stream_text_chunks(hold, remaining_text)
+            self._tts_short_segment_hold = ""
         if not remaining_text.strip():
             return False
 
@@ -667,6 +717,20 @@ class TTSProviderBase(ABC):
         if not chunks:
             self.processed_chars += len(raw_remaining)
             return False
+
+        min_seg = self._min_tts_segment_chars()
+        merged: list[str] = []
+        for chunk in chunks:
+            if not (chunk or "").strip():
+                continue
+            if merged and (
+                textUtils.is_tts_segment_too_short(merged[-1], min_seg)
+                or textUtils.is_tts_segment_too_short(chunk, min_seg)
+            ):
+                merged[-1] = textUtils.join_stream_text_chunks(merged[-1], chunk)
+            else:
+                merged.append(chunk)
+        chunks = merged
 
         for chunk in chunks:
             segment_text = textUtils.get_string_no_punctuation_or_emoji(chunk)
@@ -742,3 +806,4 @@ class TTSProviderBase(ABC):
     def reset_stream_state(self):
         """重置流式处理状态，用于会话开始时清理残留状态"""
         self._pending_prefix = ""
+        self._tts_short_segment_hold = ""

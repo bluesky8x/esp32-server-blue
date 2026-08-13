@@ -101,6 +101,38 @@ def normalize_vietnamese_tts_text(text: str) -> str:
     return text
 
 
+# Scripts that break vi-VN Edge TTS or leak from ASR/LLM noise.
+_UNWANTED_TTS_SCRIPT_RE = re.compile(
+    r"[\u4E00-\u9FFF\u3400-\u4DBF\u3040-\u30FF\uAC00-\uD7AF"
+    r"\u0E00-\u0E7F\u0400-\u04FF]+"
+)
+
+
+def strip_unwanted_scripts_for_tts(text: str) -> str:
+    """Remove CJK / Thai / Cyrillic runs before speech synthesis."""
+    if not text:
+        return ""
+    cleaned = _UNWANTED_TTS_SCRIPT_RE.sub("", text)
+    return re.sub(r"\s{2,}", " ", cleaned)
+
+
+def tts_spoken_length(text: str) -> int:
+    """Length after trim — used for min-segment merge rules."""
+    return len((text or "").strip())
+
+
+def is_tts_segment_too_short(text: str, min_chars: int = 12) -> bool:
+    """True when a segment is too short to synthesize alone (not only fillers like Dạ)."""
+    if not text or not str(text).strip():
+        return True
+    return tts_spoken_length(text) < max(4, int(min_chars))
+
+
+def is_tts_filler_only(text: str) -> bool:
+    """Deprecated alias — use is_tts_segment_too_short with default min_chars."""
+    return is_tts_segment_too_short(text, min_chars=12)
+
+
 def is_punctuation_or_emoji(char):
     """检查字符是否为指定标点或表情符号（不含空格）"""
     # 定义需要去除的中英文标点（包括全角/半角）

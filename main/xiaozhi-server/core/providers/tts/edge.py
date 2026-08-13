@@ -5,7 +5,12 @@ import uuid
 import edge_tts
 from edge_tts.exceptions import NoAudioReceived
 from datetime import datetime
+from config.logger import setup_logging
 from core.providers.tts.base import TTSProviderBase
+from core.utils.textUtils import strip_unwanted_scripts_for_tts
+
+TAG = __name__
+logger = setup_logging()
 
 _EDGE_TTS_TIMEOUT_S = 12
 
@@ -43,15 +48,35 @@ class TTSProvider(TTSProviderBase):
         self.edge_rate = f"{self.speech_rate:+}%"
         self.edge_volume = f"{self.volume:+}%"
         self.edge_pitch = f"{self.pitch_rate:+}Hz"
-        self.fallback_voice = config.get("fallback_voice", "zh-CN-XiaoxiaoNeural")
+        self.fallback_voice = config.get("fallback_voice")
 
-    @staticmethod
-    def _sanitize_for_voice(text: str) -> str:
+    def _sanitize_for_voice(self, text: str) -> str:
         """Strip scripts the active voice cannot speak (avoids wrong-language TTS)."""
         if not text:
             return text
-        cleaned = _THAI_RE.sub("", text)
-        return cleaned.strip() or text
+        cleaned = strip_unwanted_scripts_for_tts(text)
+        cleaned = _THAI_RE.sub("", cleaned)
+        cleaned = cleaned.strip()
+        if cleaned != (text or "").strip():
+            logger.bind(tag=TAG).warning(
+                f"Edge TTS stripped foreign scripts: {text!r} -> {cleaned!r}"
+            )
+        return cleaned or ""
+
+    def _locale_fallback_voice(self, text: str) -> str | None:
+        """Never fall back to Chinese voice for vi/en — causes gibberish on mixed text."""
+        explicit = self.fallback_voice
+        conn = getattr(self, "conn", None)
+        locale = getattr(conn, "active_locale", None) or "vi"
+        if locale in ("vi", "en"):
+            if explicit and explicit != self.voice and not _CJK_RE.search(text or ""):
+                return None
+            if locale == "en":
+                return explicit or "en-US-JennyNeural"
+            return None
+        if explicit and explicit != self.voice and _CJK_RE.search(text or ""):
+            return explicit
+        return None
 
     def generate_filename(self, extension=".mp3"):
         return os.path.join(
@@ -103,16 +128,20 @@ class TTSProvider(TTSProviderBase):
     async def text_to_speak(self, text, output_file):
         try:
             text = self._sanitize_for_voice(text)
+            if not text or not text.strip():
+                return None if output_file else b""
+            logger.bind(tag=TAG).debug(
+                f"Edge TTS speak voice={self.voice!r} text={text!r}"
+            )
             result = await self._stream_to_target(text, self.voice, output_file)
             got_audio = (result > 0) if output_file else bool(result)
-            if (
-                not got_audio
-                and self.fallback_voice
-                and self.fallback_voice != self.voice
-                and _CJK_RE.search(text)
-            ):
+            fallback = self._locale_fallback_voice(text)
+            if not got_audio and fallback:
+                logger.bind(tag=TAG).info(
+                    f"Edge TTS retry fallback voice={fallback!r} text={text!r}"
+                )
                 result = await self._stream_to_target(
-                    text, self.fallback_voice, output_file
+                    text, fallback, output_file
                 )
             if output_file:
                 if result <= 0:
