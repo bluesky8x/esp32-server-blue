@@ -1,6 +1,10 @@
 # Local overrides — copy to data/.config.yaml and fill in API keys.
 # data/ is gitignored. Blue defaults (Kira, vi/en, motor, VAD) are in ../config.yaml.
 
+# Optional: override base identity (merged into agent-base-prompt.txt as {{base_prompt}})
+# prompt: |
+#   Bạn là robot AI đồng hành — thân thiện, vui vẻ và an toàn...
+
 server:
   # LAN IP of the machine running xiaozhi-server (robot OTA/WebSocket):
   websocket: ws://192.168.68.71:8000/xiaozhi/v1/
