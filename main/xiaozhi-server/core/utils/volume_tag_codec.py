@@ -69,6 +69,20 @@ def strip_vol_tags(text: str, *, trim_edges: bool = False) -> str:
     return cleaned
 
 
+_EN_PERCENT_WORDS: dict[str, int] = {
+    "ten": 10,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+    "hundred": 100,
+}
+
+
 def _parse_number_token(token: str) -> int | None:
     token = (token or "").strip().lower()
     if token.isdigit():
@@ -102,6 +116,10 @@ def infer_volume_from_user_text(text: str) -> int | None:
     for word, num in _VI_NUMBER_WORDS.items():
         if re.search(rf"\b{word}\s*(?:phần trăm|phan tram|%)\b", t, re.IGNORECASE):
             return clamp_volume(num * 10)
+
+    for word, num in _EN_PERCENT_WORDS.items():
+        if re.search(rf"\b{word}\s*(?:percent|%)\b", t, re.IGNORECASE):
+            return clamp_volume(num)
 
     if _VOLUME_UP_RE.search(t):
         return 90

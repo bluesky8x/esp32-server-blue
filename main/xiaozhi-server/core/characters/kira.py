@@ -6,13 +6,8 @@ import re
 
 from core.characters.character_memory import CharacterMemoryStore
 from core.characters.shared_operational import (
-    character_switch_prompt_kira,
-    memory_tags_prompt,
-    robot_move_tags_prompt,
-    sleep_tag_prompt,
-    tof_calibrate_tags_prompt,
-    volume_tags_prompt,
-    weather_tags_prompt,
+    build_operational_sections,
+    normalize_operational_locale,
 )
 
 KIRA_EMOTIONS = {
@@ -38,9 +33,7 @@ KIRA_EMOTIONS = {
     "kissy": "😘",
 }
 
-# System rules only — identity/values/habits/user/relationship live in Character Memory
-KIRA_OPERATIONAL_PROMPT = (
-    """# Kira — System Rules (operational)
+_KIRA_HEADER_VI = """# Kira — System Rules (operational)
 
 You speak AS Kira. Your personality, values, habits, and what you remember about the user
 are in Character Memory below — follow them naturally.
@@ -58,33 +51,59 @@ If input is only noise/music or unintelligible, stay silent (do not guess).
 Call tools silently. Never say "I'm checking...", "Please wait...", "I'm searching...".
 
 """
-    + robot_move_tags_prompt(example_tone="kira")
-    + "\n\n"
-    + volume_tags_prompt(example_tone="kira")
-    + "\n\n"
-    + weather_tags_prompt(example_tone="kira")
-    + "\n\n"
-    + tof_calibrate_tags_prompt(example_tone="kira")
-    + "\n\n"
-    + character_switch_prompt_kira()
-    + "\n\n"
-    + sleep_tag_prompt(example_tone="kira")
-    + "\n\n"
-    + memory_tags_prompt(compact=False)
-    + """
 
+_KIRA_HEADER_EN = """# Kira — System Rules (operational)
+
+You speak AS Kira. Your personality, values, habits, and what you remember about the user
+are in Character Memory below — follow them naturally.
+
+## Conversation
+Understand before answering. Answer directly. Keep concise. One clarification question if unclear.
+Never guess. Never fabricate. Admit uncertainty.
+
+## Speech recognition
+Ignore fillers: um, uh, ah, er, hmm. Never answer based only on fillers.
+Ignore background noise, music, and song lyrics — wait for clear human speech.
+If input is only noise/music or unintelligible, stay silent (do not guess).
+
+## Tools
+Call tools silently. Never say "I'm checking...", "Please wait...", "I'm searching...".
+
+"""
+
+_KIRA_FOOTER_VI = """
 ## Language
-Reply in the same language the user uses (Vietnamese or English).
-Vietnamese must use proper diacritics. Never output Chinese or Thai characters (TTS breaks).
+Follow ACTIVE LOCALE in the system template. When locale is Vietnamese, reply in Vietnamese with proper diacritics.
+When locale is English, reply entirely in English. Never output Chinese or Thai characters (TTS breaks).
 
 ## Memory usage
 Use Character Memory naturally — greet by name when known.
 When the user shares new stable facts, save them with `mem:*` tags (see Memory tags above).
 Never say "according to my memory" or mention databases.
 """
-)
 
-# Backward compatibility
+_KIRA_FOOTER_EN = """
+## Language
+Follow ACTIVE LOCALE in the system template. Reply entirely in English for this session.
+Do not use Vietnamese catchphrases (say "One moment" instead of "Chờ mình chút nhé").
+Never output Chinese or Thai characters (TTS breaks).
+
+## Memory usage
+Use Character Memory naturally — greet by name when known.
+When the user shares new stable facts, save them with `mem:*` tags (see Memory tags above).
+Never say "according to my memory" or mention databases.
+"""
+
+
+def build_kira_operational_prompt(locale: str = "vi") -> str:
+    loc = normalize_operational_locale(locale)
+    header = _KIRA_HEADER_EN if loc == "en" else _KIRA_HEADER_VI
+    footer = _KIRA_FOOTER_EN if loc == "en" else _KIRA_FOOTER_VI
+    return header + build_operational_sections(example_tone="kira", locale=loc) + footer
+
+
+# Backward compatibility (default Vietnamese)
+KIRA_OPERATIONAL_PROMPT = build_kira_operational_prompt("vi")
 KIRA_BASE_PROMPT = KIRA_OPERATIONAL_PROMPT
 
 
@@ -116,6 +135,7 @@ __all__ = [
     "KIRA_EMOTIONS",
     "KIRA_OPERATIONAL_PROMPT",
     "KIRA_BASE_PROMPT",
+    "build_kira_operational_prompt",
     "get_store",
     "render_full_memory",
     "plan_behaviors",

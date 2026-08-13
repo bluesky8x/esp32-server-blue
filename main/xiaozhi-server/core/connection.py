@@ -742,7 +742,10 @@ class ConnectionHandler:
         # 更新上下文信息
         self.prompt_manager.update_context_info(self, self.client_ip)
         enhanced_prompt = self.prompt_manager.build_enhanced_prompt(
-            get_operational_prompt(self.active_character or self.config.get("character") or "kira"),
+            get_operational_prompt(
+                self.active_character or self.config.get("character") or "kira",
+                getattr(self, "active_locale", "vi"),
+            ),
             self.device_id,
             self.client_ip,
             active_character=self.active_character,
@@ -1850,106 +1853,115 @@ class ConnectionHandler:
 
         tool_names = {t.get("function", {}).get("name") for t in tools}
 
-        # === few-shot 示例（is_temporary）===
-        # 展示 direct_answer 携带 response 参数的用法，一次调用完成回复
+        locale = getattr(self, "active_locale", None) or "vi"
+        if str(locale).lower() == "en":
+            self._inject_direct_answer_fewshot_en(tool_names)
+        else:
+            self._inject_direct_answer_fewshot_vi(tool_names)
 
-        # 示例1：direct_answer（回复内容写在 response 参数里，无需递归）
-        da_tc_id = "fewshot_da_001"
-        self.dialogue.put(Message(role="user", content="给我讲个故事吧", is_temporary=True))
-        self.dialogue.put(Message(
-            role="assistant",
-            tool_calls=[{
-                "id": da_tc_id,
-                "function": {"arguments": '{"response": "好呀，你想听什么类型的呀？童话、冒险还是搞笑的？选一个我给你开讲~"}', "name": "direct_answer"},
-                "type": "function", "index": 0,
-            }],
-            is_temporary=True,
-        ))
-        self.dialogue.put(Message(
-            role="tool", tool_call_id=da_tc_id,
-            content="已直接回复", is_temporary=True,
-        ))
+        self.logger.bind(tag=TAG).debug(
+            f"已注入工具调用 few-shot 示例 (locale={locale})"
+        )
 
-        # 示例1b：robot mv tag（Kita quẹo trái → direct_answer + mv:t）
-        da_robot_id = "fewshot_da_robot_001"
-        self.dialogue.put(Message(role="user", content="Kita ơi quẹo trái", is_temporary=True))
-        self.dialogue.put(Message(
-            role="assistant",
-            tool_calls=[{
-                "id": da_robot_id,
-                "function": {
-                    "arguments": '{"response": "Mình đi sang trái rồi nha mv:t"}',
-                    "name": "direct_answer",
-                },
-                "type": "function", "index": 0,
-            }],
-            is_temporary=True,
-        ))
-        self.dialogue.put(Message(
-            role="tool", tool_call_id=da_robot_id,
-            content="已直接回复", is_temporary=True,
-        ))
+    def _put_direct_answer_fewshot(self, user: str, response: str, tc_id: str) -> None:
+        self.dialogue.put(Message(role="user", content=user, is_temporary=True))
+        self.dialogue.put(
+            Message(
+                role="assistant",
+                tool_calls=[
+                    {
+                        "id": tc_id,
+                        "function": {
+                            "arguments": json.dumps(
+                                {"response": response}, ensure_ascii=False
+                            ),
+                            "name": "direct_answer",
+                        },
+                        "type": "function",
+                        "index": 0,
+                    }
+                ],
+                is_temporary=True,
+            )
+        )
+        self.dialogue.put(
+            Message(
+                role="tool",
+                tool_call_id=tc_id,
+                content="已直接回复",
+                is_temporary=True,
+            )
+        )
 
-        da_robot_id2 = "fewshot_da_robot_002"
-        self.dialogue.put(Message(role="user", content="Quay phải đi", is_temporary=True))
-        self.dialogue.put(Message(
-            role="assistant",
-            tool_calls=[{
-                "id": da_robot_id2,
-                "function": {
-                    "arguments": '{"response": "Mình quay phải nha mv:p"}',
-                    "name": "direct_answer",
-                },
-                "type": "function", "index": 0,
-            }],
-            is_temporary=True,
-        ))
-        self.dialogue.put(Message(
-            role="tool", tool_call_id=da_robot_id2,
-            content="已直接回复", is_temporary=True,
-        ))
+    def _inject_direct_answer_fewshot_vi(self, tool_names: set) -> None:
+        """Vietnamese direct_answer + tag few-shot examples."""
+        self._put_direct_answer_fewshot(
+            "给我讲个故事吧",
+            "好呀，你想听什么类型的呀？童话、冒险还是搞笑的？选一个我给你开讲~",
+            "fewshot_da_001",
+        )
+        self._put_direct_answer_fewshot(
+            "Kita ơi quẹo trái",
+            "Mình đi sang trái rồi nha mv:t",
+            "fewshot_da_robot_001",
+        )
+        self._put_direct_answer_fewshot(
+            "Quay phải đi",
+            "Mình quay phải nha mv:p",
+            "fewshot_da_robot_002",
+        )
+        self._put_direct_answer_fewshot(
+            "Thôi mình buồn ngủ quá",
+            "Ngủ ngon nha, mai chơi tiếp sleep",
+            "fewshot_da_sleep_001",
+        )
+        self._put_direct_answer_fewshot(
+            "Mình thích cà phê lắm",
+            "Okie, mình nhớ bạn thích cà phê nha mem:like:coffee",
+            "fewshot_da_mem_001",
+        )
+        self._inject_sleep_tool_fewshot_vi(tool_names)
 
-        # 示例1c：sleep tag（buồn ngủ → goodbye + sleep）
-        da_sleep_id = "fewshot_da_sleep_001"
-        self.dialogue.put(Message(role="user", content="Thôi mình buồn ngủ quá", is_temporary=True))
-        self.dialogue.put(Message(
-            role="assistant",
-            tool_calls=[{
-                "id": da_sleep_id,
-                "function": {
-                    "arguments": '{"response": "Ngủ ngon nha, mai chơi tiếp sleep"}',
-                    "name": "direct_answer",
-                },
-                "type": "function", "index": 0,
-            }],
-            is_temporary=True,
-        ))
-        self.dialogue.put(Message(
-            role="tool", tool_call_id=da_sleep_id,
-            content="已直接回复", is_temporary=True,
-        ))
+    def _inject_direct_answer_fewshot_en(self, tool_names: set) -> None:
+        """English direct_answer + tag few-shot examples."""
+        self._put_direct_answer_fewshot(
+            "Tell me a story",
+            "Sure! Do you want a fairy tale, adventure, or something funny?",
+            "fewshot_da_en_001",
+        )
+        self._put_direct_answer_fewshot(
+            "Turn left",
+            "Turning left now mv:t",
+            "fewshot_da_robot_en_001",
+        )
+        self._put_direct_answer_fewshot(
+            "Turn right",
+            "Turning right mv:p",
+            "fewshot_da_robot_en_002",
+        )
+        self._put_direct_answer_fewshot(
+            "I'm getting sleepy",
+            "Goodnight, see you tomorrow sleep",
+            "fewshot_da_sleep_en_001",
+        )
+        self._put_direct_answer_fewshot(
+            "I love coffee",
+            "Got it, I'll remember you like coffee mem:like:coffee",
+            "fewshot_da_mem_en_001",
+        )
+        self._put_direct_answer_fewshot(
+            "Set volume to fifty percent",
+            "Sure, setting volume to 50 vol:50",
+            "fewshot_da_vol_en_001",
+        )
+        self._put_direct_answer_fewshot(
+            "What's the weather in London tomorrow?",
+            "Let me check tomorrow's weather in London wx:London@tomorrow",
+            "fewshot_da_wx_en_001",
+        )
+        self._inject_sleep_tool_fewshot_en(tool_names)
 
-        # 示例1d：mem tag（user shares like → save long-term memory）
-        da_mem_id = "fewshot_da_mem_001"
-        self.dialogue.put(Message(role="user", content="Mình thích cà phê lắm", is_temporary=True))
-        self.dialogue.put(Message(
-            role="assistant",
-            tool_calls=[{
-                "id": da_mem_id,
-                "function": {
-                    "arguments": '{"response": "Okie, mình nhớ bạn thích cà phê nha mem:like:coffee"}',
-                    "name": "direct_answer",
-                },
-                "type": "function", "index": 0,
-            }],
-            is_temporary=True,
-        ))
-        self.dialogue.put(Message(
-            role="tool", tool_call_id=da_mem_id,
-            content="已直接回复", is_temporary=True,
-        ))
-
-        # 示例2：真实工具调用（go_to_sleep / handle_exit_intent）
+    def _inject_sleep_tool_fewshot_vi(self, tool_names: set) -> None:
         if "go_to_sleep" in tool_names:
             tc_id = "fewshot_sleep_001"
             self.dialogue.put(Message(role="user", content="ngủ đi nhé", is_temporary=True))
@@ -1994,7 +2006,50 @@ class ConnectionHandler:
                 role="assistant", content="再见，下次再聊~", is_temporary=True,
             ))
 
-        self.logger.bind(tag=TAG).debug("已注入工具调用 few-shot 示例")
+    def _inject_sleep_tool_fewshot_en(self, tool_names: set) -> None:
+        if "go_to_sleep" in tool_names:
+            tc_id = "fewshot_sleep_en_001"
+            self.dialogue.put(Message(role="user", content="go to sleep", is_temporary=True))
+            self.dialogue.put(Message(
+                role="assistant",
+                tool_calls=[{
+                    "id": tc_id,
+                    "function": {
+                        "arguments": '{"say_goodbye": "Goodnight! See you later 😴"}',
+                        "name": "go_to_sleep",
+                    },
+                    "type": "function", "index": 0,
+                }],
+                is_temporary=True,
+            ))
+            self.dialogue.put(Message(
+                role="tool", tool_call_id=tc_id,
+                content="sleep_intent_handled", is_temporary=True,
+            ))
+            self.dialogue.put(Message(
+                role="assistant",
+                content="Goodnight! See you later 😴",
+                is_temporary=True,
+            ))
+        elif "handle_exit_intent" in tool_names:
+            tc_id = "fewshot_exit_en_001"
+            self.dialogue.put(Message(role="user", content="goodbye", is_temporary=True))
+            self.dialogue.put(Message(
+                role="assistant",
+                tool_calls=[{
+                    "id": tc_id,
+                    "function": {"arguments": '{"say_goodbye": "Bye! Talk to you soon."}', "name": "handle_exit_intent"},
+                    "type": "function", "index": 0,
+                }],
+                is_temporary=True,
+            ))
+            self.dialogue.put(Message(
+                role="tool", tool_call_id=tc_id,
+                content="exit_intent_handled", is_temporary=True,
+            ))
+            self.dialogue.put(Message(
+                role="assistant", content="Bye! Talk to you soon.", is_temporary=True,
+            ))
 
     def _init_report_threads(self):
         """初始化ASR和TTS上报线程"""
@@ -2313,7 +2368,7 @@ class ConnectionHandler:
             auto_extract=self._character_memory_auto_extract(),
         )
         enhanced = self.prompt_manager.refresh_device_prompt(
-            get_operational_prompt(character),
+            get_operational_prompt(character, getattr(self, "active_locale", "vi")),
             self.device_id,
             self.client_ip,
             active_character=character,

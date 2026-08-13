@@ -121,7 +121,9 @@ def apply_active_character(conn: "ConnectionHandler", character_id: str) -> bool
         return False
 
     conn.active_character = character_id
-    conn.config["prompt"] = get_operational_prompt(character_id)
+    conn.config["prompt"] = get_operational_prompt(
+        character_id, getattr(conn, "active_locale", None)
+    )
     conn._character_switch_until = time.time() + 2.0
 
     from core.utils.language_runtime import apply_locale_to_connection, default_locale

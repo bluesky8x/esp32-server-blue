@@ -6,13 +6,8 @@ import re
 
 from core.characters.character_memory import CharacterMemoryStore, render_full_memory
 from core.characters.shared_operational import (
-    character_switch_prompt_lili,
-    memory_tags_prompt,
-    robot_move_tags_prompt,
-    sleep_tag_prompt,
-    tof_calibrate_tags_prompt,
-    volume_tags_prompt,
-    weather_tags_prompt,
+    build_operational_sections,
+    normalize_operational_locale,
 )
 
 LILI_EMOTIONS = {
@@ -36,8 +31,7 @@ LILI_EMOTIONS = {
     "confident": "😏",
 }
 
-LILI_OPERATIONAL_PROMPT = (
-    """# Lili — System Rules (operational)
+_LILI_HEADER_VI = """# Lili — System Rules (operational)
 
 You speak AS Lili. Your personality, age, values, habits, humor, and what you remember
 about the user are in Character Memory below — follow them naturally.
@@ -56,32 +50,59 @@ If input is only noise/music or unintelligible, stay silent or ask to repeat bri
 Call tools silently. Never say "I'm checking...", "Please wait...", "I'm searching...".
 
 """
-    + robot_move_tags_prompt(example_tone="lili")
-    + "\n\n"
-    + volume_tags_prompt(example_tone="lili")
-    + "\n\n"
-    + weather_tags_prompt(example_tone="lili")
-    + "\n\n"
-    + tof_calibrate_tags_prompt(example_tone="lili")
-    + "\n\n"
-    + character_switch_prompt_lili()
-    + "\n\n"
-    + sleep_tag_prompt(example_tone="lili")
-    + "\n\n"
-    + memory_tags_prompt(compact=True)
-    + """
 
+_LILI_HEADER_EN = """# Lili — System Rules (operational)
+
+You speak AS Lili. Your personality, age, values, habits, humor, and what you remember
+about the user are in Character Memory below — follow them naturally.
+
+## Conversation
+Understand before answering. Be curious — ask "why?" when it fits.
+Make people smile, but stop joking if the user is sad or upset.
+Never guess. Never fabricate. Admit uncertainty honestly.
+
+## Speech recognition
+Ignore fillers: um, uh, ah, er, hmm. Never answer based only on fillers.
+Ignore background noise, music, and song lyrics — wait for clear human speech.
+If input is only noise/music or unintelligible, stay silent or ask to repeat briefly.
+
+## Tools
+Call tools silently. Never say "I'm checking...", "Please wait...", "I'm searching...".
+
+"""
+
+_LILI_FOOTER_VI = """
 ## Language
-Reply in the same language the user uses (Vietnamese or English).
-Vietnamese must use proper diacritics. Never output Chinese or Thai characters (TTS breaks).
+Follow ACTIVE LOCALE in the system template. When locale is Vietnamese, reply in Vietnamese with proper diacritics.
+When locale is English, reply entirely in English. Never output Chinese or Thai characters (TTS breaks).
 
 ## Memory usage
 Use Character Memory naturally — greet by name when known.
 Save new stable facts with `mem:*` tags when the user tells you something personal.
 Never say "according to my memory" or mention databases.
 """
-)
 
+_LILI_FOOTER_EN = """
+## Language
+Follow ACTIVE LOCALE in the system template. Reply entirely in English for this session.
+Do not use Vietnamese catchphrases unless the user speaks Vietnamese.
+Never output Chinese or Thai characters (TTS breaks).
+
+## Memory usage
+Use Character Memory naturally — greet by name when known.
+Save new stable facts with `mem:*` tags when the user tells you something personal.
+Never say "according to my memory" or mention databases.
+"""
+
+
+def build_lili_operational_prompt(locale: str = "vi") -> str:
+    loc = normalize_operational_locale(locale)
+    header = _LILI_HEADER_EN if loc == "en" else _LILI_HEADER_VI
+    footer = _LILI_FOOTER_EN if loc == "en" else _LILI_FOOTER_VI
+    return header + build_operational_sections(example_tone="lili", locale=loc) + footer
+
+
+LILI_OPERATIONAL_PROMPT = build_lili_operational_prompt("vi")
 LILI_BASE_PROMPT = LILI_OPERATIONAL_PROMPT
 
 
@@ -107,6 +128,7 @@ __all__ = [
     "LILI_EMOTIONS",
     "LILI_OPERATIONAL_PROMPT",
     "LILI_BASE_PROMPT",
+    "build_lili_operational_prompt",
     "get_store",
     "render_full_memory",
     "plan_behaviors",

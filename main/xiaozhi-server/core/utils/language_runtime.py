@@ -239,6 +239,15 @@ def apply_locale_to_connection(conn, locale: str, *, reason: str = "") -> str:
             f"[locale] {prev or '?'} → {locale}"
             + (f" ({reason})" if reason else "")
         )
+        refresh = getattr(conn, "_refresh_character_memory_prompt", None)
+        if refresh and getattr(conn, "prompt_manager", None):
+            try:
+                refresh("")
+            except Exception as exc:
+                if logger:
+                    logger.bind(tag=TAG).warning(
+                        f"[locale] prompt refresh failed: {exc}"
+                    )
     return locale
 
 
