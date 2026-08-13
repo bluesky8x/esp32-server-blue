@@ -67,26 +67,34 @@ When you **confirm** you will move, you **must** append the matching `mv:*` — 
 def weather_tags_prompt(*, example_tone: str = "kira") -> str:
     if example_tone == "lili":
         example = '✅ *"Okie, để mình xem thời tiết Hà Nội nha wx:Hà Nội"*'
+        tomorrow_ex = '✅ *"Mình xem thời tiết ngày mai ở Sài Gòn nha wx:Ho Chi Minh@tomorrow"*'
         local_example = '✅ *"Mình xem thời tiết chỗ mình nha wx:local"*'
     else:
         example = '✅ *"Dạ, để mình xem thời tiết Sài Gòn nha wx:Ho Chi Minh"*'
+        tomorrow_ex = '✅ *"Dạ, để mình xem thời tiết ngày mai HCM nha wx:Ho Chi Minh@tomorrow"*'
         local_example = '✅ *"Mình xem thời tiết ở đây nha wx:local"*'
     return f"""## Weather lookup (Open-Meteo — tag triggers fetch)
-When the user asks about **weather** (thời tiết, mưa, nắng, nóng, lạnh, forecast):
+When the user asks about **weather** (thời tiết, mưa, nắng, forecast):
 1. Reply with a **short natural sentence** (do not invent numbers — you do not know the weather yet).
-2. Append **`wx:<place>`** or **`wx:local`** at the **very end** (stripped before TTS). Server fetches Open-Meteo data and speaks a **natural summary** right after (not raw numbers in your reply).
+2. Append **`wx:<place>@<when>`** at the **very end** (stripped before TTS). Infer **when** from the user question.
+
+**Tag format:** `wx:<place>@<when>` or `wx:local@<when>` — `<when>` is required when user mentions a future day or range.
 
 | User asks | Tag |
 |-----------|-----|
-| Weather here / chỗ này / hôm nay mưa không | `wx:local` or `wx:` |
-| Weather in Hanoi / Hà Nội thế nào | `wx:Hà Nội` |
-| Saigon weather | `wx:Ho Chi Minh` or `wx:Sài Gòn` |
+| Hôm nay / now / chỗ này | `wx:local` or `wx:Ho Chi Minh` (default = today) |
+| **Ngày mai** | `wx:Ho Chi Minh@tomorrow` or `wx:Hà Nội@d1` |
+| **Ngày kia / ngày mốt** | `wx:Hà Nội@d2` |
+| **3 ngày tới** (including today) | `wx:HCM@d0-2` or `wx:HCM@3d` |
+| **3 ngày từ ngày mai** | `wx:HCM@d1-3` |
+| Specific city, no time | `wx:Hà Nội` (= today) |
 
 {example}
+{tomorrow_ex}
 {local_example}
-❌ Bad: guessing temperature or rain **without** `wx:` — numbers will be wrong
-❌ Bad: *"Để mình tra thời tiết wx:Hà Nội"* with code in the middle — tag must be **last**
-❌ Bad: long forecast in your reply — server speaks facts after fetch
+❌ Bad: user says **ngày mai** but tag is `wx:HCM` without `@tomorrow` — server will answer **today**
+❌ Bad: guessing temperature **without** `wx:` — numbers will be wrong
+❌ Bad: tag not at the **very end** of your reply
 
 **No STT fallback** — only your `wx:*` tag triggers weather lookup (same as `mv:*`)."""
 

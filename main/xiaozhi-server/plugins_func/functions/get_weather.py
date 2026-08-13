@@ -280,16 +280,23 @@ async def fetch_open_meteo_forecast(
 
 
 def build_weather_raw_payload(
-    geo: dict[str, Any], forecast: dict[str, Any]
+    geo: dict[str, Any],
+    forecast: dict[str, Any],
+    *,
+    time_request: "WeatherLookupRequest | None" = None,
 ) -> dict[str, Any]:
-    """Locale-neutral JSON for LLM to turn into natural speech."""
+    """Locale-neutral JSON for LLM — filtered to the requested day range."""
+    from core.utils.weather_tag_codec import WeatherLookupRequest, default_weather_request
+
+    req = time_request or default_weather_request()
     current = forecast["current"]
     daily = forecast["daily"]
-    days: list[dict[str, Any]] = []
+    all_days: list[dict[str, Any]] = []
     for idx, date in enumerate(daily.get("time") or []):
         code = (daily.get("weather_code") or [0])[idx]
-        days.append(
+        all_days.append(
             {
+                "offset_days": idx,
                 "date": date,
                 "condition": wmo_label(code, "en"),
                 "weather_code": code,
@@ -297,17 +304,57 @@ def build_weather_raw_payload(
                 "low_c": _round_temp((daily.get("temperature_2m_min") or [None])[idx]),
             }
         )
-    return {
+
+    start = max(0, min(req.start_offset, len(all_days) - 1))
+    end = max(start, min(req.end_offset, len(all_days) - 1))
+    selected = all_days[start : end + 1]
+
+    period = _period_labels(req, selected)
+
+    payload: dict[str, Any] = {
         "place": geo.get("name") or "",
         "country_code": geo.get("country_code"),
         "timezone": forecast.get("timezone"),
-        "current": {
+        "requested_period": period,
+        "days": selected,
+    }
+    if req.include_current and req.start_offset == 0:
+        payload["current"] = {
             "temperature_c": _round_temp(current.get("temperature_2m")),
             "weather_code": current.get("weather_code"),
             "condition": wmo_label(current.get("weather_code", 0), "en"),
-        },
-        "today": days[0] if days else None,
-        "forecast_7d": days,
+        }
+    return payload
+
+
+def _period_labels(
+    req: "WeatherLookupRequest", selected: list[dict[str, Any]]
+) -> dict[str, Any]:
+    if req.start_offset == req.end_offset == 0:
+        desc_en, desc_vi = "today", "hôm nay"
+    elif req.start_offset == req.end_offset == 1:
+        desc_en, desc_vi = "tomorrow", "ngày mai"
+    elif req.start_offset == req.end_offset == 2:
+        desc_en, desc_vi = "the day after tomorrow", "ngày kia"
+    elif req.end_offset - req.start_offset >= 1:
+        count = req.end_offset - req.start_offset + 1
+        desc_en = f"days {req.start_offset}–{req.end_offset} ({count}-day outlook)"
+        if req.start_offset == 0:
+            desc_vi = f"{count} ngày tới (từ hôm nay)"
+        else:
+            desc_vi = f"{count} ngày (từ ngày +{req.start_offset})"
+    else:
+        desc_en = f"day +{req.start_offset}"
+        desc_vi = f"ngày +{req.start_offset}"
+
+    dates = [d.get("date") for d in selected if d.get("date")]
+    return {
+        "time_key": req.time_key,
+        "start_offset_days": req.start_offset,
+        "end_offset_days": req.end_offset,
+        "description_en": desc_en,
+        "description_vi": desc_vi,
+        "dates": dates,
     }
 
 
@@ -452,7 +499,13 @@ async def fetch_weather_data(
     *,
     locale: str = "vi",
     lang: str | None = None,
+    time_request: "WeatherLookupRequest | None" = None,
 ) -> dict[str, Any] | None:
+    from core.utils.weather_tag_codec import WeatherLookupRequest, default_weather_request
+
+    req = time_request or default_weather_request((location or "").strip())
+    if req.location and not location:
+        location = req.location
     weather_config = _weather_config(conn)
     geocoding_url = weather_config.get("geocoding_url", OPEN_METEO_GEO_URL)
     forecast_url = weather_config.get("forecast_url", OPEN_METEO_FORECAST_URL)
@@ -482,7 +535,8 @@ async def fetch_weather_data(
         return None
 
     snapshot = build_weather_snapshot(geo, forecast, speech_lang=speech_lang)
-    snapshot["raw"] = build_weather_raw_payload(geo, forecast)
+    snapshot["raw"] = build_weather_raw_payload(geo, forecast, time_request=req)
+    snapshot["time_request"] = req
     snapshot["requested_location"] = requested
     snapshot["resolved_name"] = resolved_name
     return snapshot
@@ -502,8 +556,10 @@ def _weather_naturalize_system_prompt(*, locale: str, character_name: str) -> st
         f"You are {character_name}, a warm voice assistant. "
         f"Turn Open-Meteo weather JSON into ONE short natural {language} reply for text-to-speech.\n"
         "Rules:\n"
-        "- 2-3 sentences max; conversational, friendly.\n"
-        "- Use ONLY facts from the JSON (place, current temp/condition, today's high/low).\n"
+        "- Read requested_period — answer ONLY for that period (today / tomorrow / multi-day).\n"
+        "- If requested_period is tomorrow or a future day, do NOT describe current weather unless JSON includes \"current\".\n"
+        "- For multi-day ranges, summarize each day briefly (2-4 sentences total).\n"
+        "- Use ONLY facts from JSON (place, dates, temps, conditions in days[]).\n"
         "- Do not invent numbers or conditions.\n"
         "- No markdown, lists, emojis, or control tags (wx:, mv:, vol:, mem:).\n"
         "- Speak temperatures naturally (e.g. Vietnamese: \"khoảng 34 độ\").\n"
@@ -516,12 +572,17 @@ async def naturalize_weather_speech(
     location: str | None = None,
     *,
     locale: str = "vi",
+    time_request: "WeatherLookupRequest | None" = None,
 ) -> str | None:
     """Fetch Open-Meteo data and ask the LLM for a natural spoken weather reply."""
     from core.characters.character_registry import get_active_character, get_display_name
+    from core.utils.weather_tag_codec import WeatherLookupRequest, default_weather_request
 
-    requested = (location or "").strip() or None
-    snapshot = await fetch_weather_data(conn, requested, locale=locale)
+    req = time_request or default_weather_request((location or "").strip())
+    requested = (location or req.location or "").strip() or None
+    snapshot = await fetch_weather_data(
+        conn, requested, locale=locale, time_request=req
+    )
     if not snapshot:
         return None
 
@@ -541,7 +602,7 @@ async def naturalize_weather_speech(
                 lambda: llm.response_no_stream(
                     system_prompt,
                     user_prompt,
-                    max_tokens=160,
+                    max_tokens=220,
                     temperature=0.35,
                 ),
             )
@@ -568,18 +629,22 @@ async def fetch_weather_speech(
     location: str | None = None,
     *,
     locale: str = "vi",
+    time_request: "WeatherLookupRequest | None" = None,
 ) -> str | None:
     """Fetch weather for wx: tag dispatch. Returns TTS-ready natural language text."""
     from core.utils.cache.manager import cache_manager, CacheType
+    from core.utils.weather_tag_codec import WeatherLookupRequest, default_weather_request
 
-    requested = (location or "").strip() or None
-    resolved = await resolve_weather_location(conn, requested)
-    weather_cache_key = f"openmeteo_natural_{resolved}_{locale}"
+    req = time_request or default_weather_request((location or "").strip())
+    resolved = await resolve_weather_location(conn, (location or req.location or None))
+    weather_cache_key = f"openmeteo_natural_{resolved}_{req.time_key}_{locale}"
     cached = cache_manager.get(CacheType.WEATHER, weather_cache_key)
     if cached:
         return cached
 
-    speech = await naturalize_weather_speech(conn, requested, locale=locale)
+    speech = await naturalize_weather_speech(
+        conn, location or req.location or None, locale=locale, time_request=req
+    )
     if speech:
         cache_manager.set(CacheType.WEATHER, weather_cache_key, speech)
     return speech

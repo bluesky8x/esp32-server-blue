@@ -1090,19 +1090,29 @@ class ConnectionHandler:
         loop.call_soon_threadsafe(_start)
 
     def _dispatch_weather_lookup(
-        self, location: str | None, *, label: str = ""
+        self, request, *, label: str = ""
     ) -> None:
+        from core.utils.weather_tag_codec import WeatherLookupRequest
+
+        if not isinstance(request, WeatherLookupRequest):
+            request = WeatherLookupRequest(
+                location="" if request is None else str(request),
+                time_key="d0",
+                start_offset=0,
+                end_offset=0,
+                include_current=True,
+            )
+
         if not getattr(self, "loop", None):
             self.logger.bind(tag=TAG).warning("[wx] skip — event loop missing")
             return
 
-        loc_key = "" if location is None else str(location)
-        dedupe_key = loc_key
+        dedupe_key = request.cache_key
         if not hasattr(self, "_executed_weather_lookups"):
             self._executed_weather_lookups = set()
         if dedupe_key in self._executed_weather_lookups:
             self.logger.bind(tag=TAG).debug(
-                f"[wx] skip duplicate wx:{loc_key or 'local'} label={label}"
+                f"[wx] skip duplicate wx:{dedupe_key} label={label}"
             )
             return
         self._executed_weather_lookups.add(dedupe_key)
@@ -1114,9 +1124,8 @@ class ConnectionHandler:
         self._schedule_wx_followup_watchdog()
 
         locale = getattr(self, "active_locale", "vi") or "vi"
-        place_label = loc_key or "local"
         self.logger.bind(tag=TAG).info(
-            f"[wx] dispatch wx:{place_label} label={label} locale={locale}"
+            f"[wx] dispatch wx:{request.cache_key} label={label} locale={locale}"
         )
 
         async def _fetch_and_speak():
@@ -1130,8 +1139,9 @@ class ConnectionHandler:
                 try:
                     text = await fetch_weather_speech(
                         self,
-                        loc_key or None,
+                        request.location or None,
                         locale=locale,
+                        time_request=request,
                     )
                 except Exception as exc:
                     self.logger.bind(tag=TAG).error(f"[wx] fetch failed: {exc}")
@@ -1165,25 +1175,24 @@ class ConnectionHandler:
         self, text: str, *, label: str = "", defer_post_tts: bool = False
     ) -> bool:
         from core.utils.weather_tag_codec import (
-            extract_weather_location_from_assistant_text,
+            extract_weather_request_from_assistant_text,
         )
 
         if not text:
             return False
-        location = extract_weather_location_from_assistant_text(text)
-        if location is None:
+        request = extract_weather_request_from_assistant_text(text)
+        if request is None:
             return False
-        loc_key = "" if location is None else str(location)
-        queue_label = f"wx:{loc_key or 'local'}"
+        queue_label = f"wx:{request.cache_key}"
         if defer_post_tts:
             self._schedule_post_tts_action(
                 queue_label,
-                lambda loc=location: self._dispatch_weather_lookup(
-                    loc, label=label or "assistant"
+                lambda req=request: self._dispatch_weather_lookup(
+                    req, label=label or "assistant"
                 ),
             )
             return True
-        self._dispatch_weather_lookup(location, label=label or "assistant")
+        self._dispatch_weather_lookup(request, label=label or "assistant")
         return True
 
     def _dispatch_tof_from_assistant_text(
