@@ -40,20 +40,33 @@ class ListenTextMessageHandler(TextMessageHandler):
         if msg_json["state"] == "start":
             now = time.time()
             last = getattr(conn, "_last_listen_start_at", 0.0)
-            if last and (now - last) < LISTEN_START_DEBOUNCE_SEC:
+            debounced = last and (now - last) < LISTEN_START_DEBOUNCE_SEC
+            if debounced:
                 conn.logger.bind(tag=TAG).debug(
                     f"listen start debounced ({now - last:.2f}s since last)"
                 )
-                # Motor re-sync sends listen start while voice is already active —
-                # still reset ASR/VAD so motor noise does not block the next utterance.
-                conn.clearSpeakStatus()
-                conn.reset_audio_states()
-                return
 
             conn._last_listen_start_at = now
-            # Device back to listening — ensure ASR accepts uplink (not stuck in speaking).
-            conn.clearSpeakStatus()
-            conn.reset_audio_states()
+
+            # Touch reset: abort stuck wx/TTS and sync device speaking → listening
+            if getattr(conn, "_wx_followup_pending", False):
+                conn._schedule_listening_recovery(
+                    reason="listen start (wx abort)", abort_tts=True
+                )
+            elif debounced:
+                conn.clearSpeakStatus()
+                conn.reset_audio_states()
+            elif conn.client_is_speaking:
+                conn._schedule_listening_recovery(
+                    reason="listen start (speaking reset)", abort_tts=False
+                )
+            else:
+                conn.clearSpeakStatus()
+                conn.reset_audio_states()
+
+            if debounced:
+                return
+
             from core.utils.wake_greeting import maybe_speak_startup_greeting
 
             asyncio.create_task(maybe_speak_startup_greeting(conn))

@@ -64,6 +64,7 @@ tts_timeout: 30
 # Long TTS (weather): split before VieNeu HTTP — avoids 15s timeout
 # tts_chunk_max_chars: 160
 # tts_chunk_max_words: 35
+# tts_max_retries: 2
 
 # --- Weather (Open-Meteo — free, no API key; AI wx: tag triggers fetch after TTS) ---
 # Docs: https://open-meteo.com/en/docs

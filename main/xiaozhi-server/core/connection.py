@@ -1063,6 +1063,54 @@ class ConnectionHandler:
             if reason:
                 self.logger.bind(tag=TAG).info(f"[wx] follow-up cleared ({reason})")
 
+    def _schedule_listening_recovery(
+        self, *, reason: str, abort_tts: bool = False
+    ) -> None:
+        """Reset server + device after wx/TTS stall so touch/mic work again."""
+        loop = getattr(self, "loop", None)
+        if not loop:
+            self._clear_wx_followup(reason=reason)
+            self.clearSpeakStatus()
+            self.reset_audio_states()
+            return
+
+        async def _recover() -> None:
+            was_wx = self._wx_followup_active()
+            self._clear_wx_followup(reason=reason)
+
+            if abort_tts:
+                self.client_abort = True
+                self.clear_queues()
+                self.client_abort = False
+
+            ws = getattr(self, "websocket", None)
+            if ws is not None and not getattr(ws, "closed", False):
+                if was_wx or self.client_is_speaking or abort_tts:
+                    try:
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "type": "tts",
+                                    "state": "stop",
+                                    "session_id": self.session_id,
+                                }
+                            )
+                        )
+                    except Exception as exc:
+                        self.logger.bind(tag=TAG).warning(
+                            f"listening recovery tts stop failed: {exc}"
+                        )
+
+            self.clearSpeakStatus()
+            self.reset_audio_states()
+            if hasattr(self, "audio_rate_controller") and self.audio_rate_controller:
+                self.audio_rate_controller.stop_sending()
+            self.logger.bind(tag=TAG).info(
+                f"Listening recovery ({reason}, abort_tts={abort_tts})"
+            )
+
+        asyncio.run_coroutine_threadsafe(_recover(), loop)
+
     def _schedule_wx_followup_watchdog(self, timeout_sec: float = 45.0) -> None:
         """Release mic lock if wx TTS never completes (TTS failure, crash, etc.)."""
         loop = getattr(self, "loop", None)
@@ -1076,7 +1124,9 @@ class ConnectionHandler:
                     self.logger.bind(tag=TAG).warning(
                         f"[wx] watchdog timeout ({timeout_sec}s) — releasing mic lock"
                     )
-                    self._clear_wx_followup(reason=f"watchdog {timeout_sec}s")
+                    self._schedule_listening_recovery(
+                        reason=f"watchdog {timeout_sec}s", abort_tts=True
+                    )
             except asyncio.CancelledError:
                 pass
 
@@ -1167,7 +1217,9 @@ class ConnectionHandler:
                 self.logger.bind(tag=TAG).error(f"[wx] speak pipeline failed: {exc}")
             finally:
                 if not spoken:
-                    self._clear_wx_followup(reason="speak pipeline failed")
+                    self._schedule_listening_recovery(
+                        reason="speak pipeline failed", abort_tts=False
+                    )
 
         asyncio.run_coroutine_threadsafe(_fetch_and_speak(), self.loop)
 
