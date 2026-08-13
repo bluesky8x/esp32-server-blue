@@ -359,14 +359,20 @@ class TTSProviderBase(ABC):
                 sentence_id = str(uuid.uuid4().hex)
                 conn.sentence_id = sentence_id
         # 对于单句的文本，进行分段处理
-        segments = re.split(r"([。！？!?；;\n])", content_detail)
-        for seg in segments:
+        cfg = getattr(conn, "config", {}) or {}
+        max_chars = int(cfg.get("tts_chunk_max_chars", 160))
+        max_words = int(cfg.get("tts_chunk_max_words", 35))
+        from core.utils.tts_chunk import split_text_for_tts
+
+        for chunk in split_text_for_tts(
+            content_detail or "", max_chars=max_chars, max_words=max_words
+        ):
             self.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=sentence_id,
                     sentence_type=SentenceType.MIDDLE,
                     content_type=content_type,
-                    content_detail=seg,
+                    content_detail=chunk,
                     content_file=content_file,
                 )
             )
@@ -568,47 +574,55 @@ class TTSProviderBase(ABC):
         if hasattr(self, "ws") and self.ws:
             await self.ws.close()
 
-    def _get_segment_text(self):
-        # 合并当前全部文本并处理未分割部分
-        full_text = "".join(self.tts_text_buff)
-        current_text = full_text[self.processed_chars :]  # 从未处理的位置开始
-        last_punct_pos = -1
+    def _tts_chunk_limits(self) -> tuple[int, int]:
+        cfg = getattr(self.conn, "config", {}) or {}
+        return (
+            int(cfg.get("tts_chunk_max_chars", 160)),
+            int(cfg.get("tts_chunk_max_words", 35)),
+        )
 
-        # 根据是否是第一句话选择不同的标点符号集合
-        punctuations_to_use = (
+    def _get_segment_text(self):
+        from core.utils.tts_chunk import take_tts_prefix
+
+        full_text = "".join(self.tts_text_buff)
+        current_text = full_text[self.processed_chars :]
+        if not current_text.strip() and not self.tts_stop_request:
+            return None
+
+        max_chars, max_words = self._tts_chunk_limits()
+        puncs = tuple(
             self.first_sentence_punctuations
             if self.is_first_sentence
             else self.punctuations
         )
 
-        for punct in punctuations_to_use:
-            pos = current_text.rfind(punct)
-            if (pos != -1 and last_punct_pos == -1) or (
-                pos != -1 and pos < last_punct_pos
-            ):
-                last_punct_pos = pos
-
-        if last_punct_pos != -1:
-            raw_slice = current_text[: last_punct_pos + 1]
-            spoken = self._sanitize_tts_text(
-                raw_slice, getattr(self, "current_sentence_id", None)
-            )
-            segment_text = textUtils.get_string_no_punctuation_or_emoji(spoken)
-            self.processed_chars += len(raw_slice)  # 更新已处理字符位置
-
-            # 如果是第一句话，在找到第一个逗号后，将标志设置为False
-            if self.is_first_sentence:
-                self.is_first_sentence = False
-
-            return segment_text
-        elif self.tts_stop_request and current_text:
-            segment_text = self._sanitize_tts_text(
-                current_text, getattr(self, "current_sentence_id", None)
-            )
-            self.is_first_sentence = True  # 重置标志
-            return segment_text
-        else:
+        prefix, _ = take_tts_prefix(
+            current_text.strip(),
+            max_chars=max_chars,
+            max_words=max_words,
+            punctuations=puncs,
+            first_sentence=self.is_first_sentence,
+        )
+        if not prefix:
             return None
+
+        stripped = current_text.lstrip()
+        lead = len(current_text) - len(stripped)
+        pos = stripped.find(prefix)
+        if pos == -1:
+            pos = 0
+        consumed = lead + pos + len(prefix)
+        while consumed < len(current_text) and current_text[consumed].isspace():
+            consumed += 1
+
+        spoken = self._sanitize_tts_text(
+            prefix, getattr(self, "current_sentence_id", None)
+        )
+        segment_text = textUtils.get_string_no_punctuation_or_emoji(spoken)
+        self.processed_chars += consumed
+        if self.is_first_sentence:
+            self.is_first_sentence = False
+        return segment_text or None
 
     def _process_audio_file_stream(
         self, tts_file, callback: Callable[[Any], Any]
@@ -643,25 +657,32 @@ class TTSProviderBase(ABC):
     def _process_remaining_text_stream(
         self, opus_handler: Callable[[bytes], None] = None
     ):
-        """处理剩余的文本并生成语音
+        """Process remaining buffered text in size-safe TTS chunks."""
+        from core.utils.tts_chunk import split_text_for_tts
 
-        Returns:
-            bool: 是否成功处理了文本
-        """
         full_text = "".join(self.tts_text_buff)
         remaining_text = full_text[self.processed_chars :]
-        if remaining_text:
-            raw_remaining = remaining_text
-            remaining_text = self._sanitize_tts_text(
-                remaining_text, getattr(self, "current_sentence_id", None)
-            )
-            segment_text = textUtils.get_string_no_punctuation_or_emoji(remaining_text)
+        if not remaining_text.strip():
+            return False
+
+        max_chars, max_words = self._tts_chunk_limits()
+        raw_remaining = remaining_text
+        remaining_text = self._sanitize_tts_text(
+            remaining_text, getattr(self, "current_sentence_id", None)
+        )
+        chunks = split_text_for_tts(
+            remaining_text, max_chars=max_chars, max_words=max_words
+        )
+        if not chunks:
             self.processed_chars += len(raw_remaining)
+            return False
+
+        for chunk in chunks:
+            segment_text = textUtils.get_string_no_punctuation_or_emoji(chunk)
             if segment_text:
                 self.to_tts_stream(segment_text, opus_handler=opus_handler)
-                return True
-            return True
-        return False
+        self.processed_chars += len(raw_remaining)
+        return True
 
     def _apply_percentage_params(self, config):
         """根据子类定义的 TTS_PARAM_CONFIG 批量应用百分比参数"""

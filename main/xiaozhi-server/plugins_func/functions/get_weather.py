@@ -629,7 +629,7 @@ def _weather_naturalize_system_prompt(*, locale: str, character_name: str) -> st
         "Rules:\n"
         "- Read requested_period — answer ONLY for that period (today / tomorrow / multi-day).\n"
         "- If tomorrow or a future day, do NOT use current unless JSON includes \"current\".\n"
-        "- Single day: 3–5 short sentences. Multi-day: 1–2 sentences per day (max ~6 sentences).\n"
+        "- Single day: 3–4 short sentences. Multi-day: **one short sentence per day** (max ~5 sentences total).\n"
         "- Pick the most useful extra details when present: feels_like, humidity, rain_chance_pct, "
         "rain_mm, wind, uv_index, sunrise/sunset.\n"
         "- Mention rain probability if rain_chance_pct >= 40. Mention feels_like if it differs a lot from temp.\n"

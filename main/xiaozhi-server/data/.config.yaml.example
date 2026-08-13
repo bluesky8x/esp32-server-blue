@@ -61,6 +61,10 @@ TTS:
 
 tts_timeout: 30
 
+# Long TTS (weather): split before VieNeu HTTP — avoids 15s timeout
+# tts_chunk_max_chars: 160
+# tts_chunk_max_words: 35
+
 # --- Weather (Open-Meteo — free, no API key; AI wx: tag triggers fetch after TTS) ---
 # Docs: https://open-meteo.com/en/docs
 # default_location: fallback when user says wx:local / wx: and IP geolocation fails
