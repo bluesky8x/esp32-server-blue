@@ -1,4 +1,6 @@
 import httpx
+import asyncio
+import json
 from config.logger import setup_logging
 from plugins_func.register import register_function, ToolType, ActionResponse, Action
 from core.utils.util import get_ip_info
@@ -170,10 +172,14 @@ def _normalize_location_query(location: str) -> str:
     return LOCATION_ALIASES.get(key, location.strip())
 
 
-def _speech_lang(*, locale: str = "vi", lang: str = "zh_CN") -> str:
-    if locale == "en" or lang.startswith("en"):
+def _speech_lang(*, locale: str = "vi", lang: str | None = None) -> str:
+    if locale == "en":
         return "en"
-    if lang.startswith("zh"):
+    if locale == "vi":
+        return "vi"
+    if lang and lang.startswith("en"):
+        return "en"
+    if lang and lang.startswith("zh"):
         return "zh"
     return "vi"
 
@@ -271,6 +277,38 @@ async def fetch_open_meteo_forecast(
         logger.bind(tag=TAG).error("Open-Meteo forecast missing current/daily fields")
         return None
     return data
+
+
+def build_weather_raw_payload(
+    geo: dict[str, Any], forecast: dict[str, Any]
+) -> dict[str, Any]:
+    """Locale-neutral JSON for LLM to turn into natural speech."""
+    current = forecast["current"]
+    daily = forecast["daily"]
+    days: list[dict[str, Any]] = []
+    for idx, date in enumerate(daily.get("time") or []):
+        code = (daily.get("weather_code") or [0])[idx]
+        days.append(
+            {
+                "date": date,
+                "condition": wmo_label(code, "en"),
+                "weather_code": code,
+                "high_c": _round_temp((daily.get("temperature_2m_max") or [None])[idx]),
+                "low_c": _round_temp((daily.get("temperature_2m_min") or [None])[idx]),
+            }
+        )
+    return {
+        "place": geo.get("name") or "",
+        "country_code": geo.get("country_code"),
+        "timezone": forecast.get("timezone"),
+        "current": {
+            "temperature_c": _round_temp(current.get("temperature_2m")),
+            "weather_code": current.get("weather_code"),
+            "condition": wmo_label(current.get("weather_code", 0), "en"),
+        },
+        "today": days[0] if days else None,
+        "forecast_7d": days,
+    }
 
 
 def build_weather_snapshot(
@@ -413,7 +451,7 @@ async def fetch_weather_data(
     location: str | None,
     *,
     locale: str = "vi",
-    lang: str = "zh_CN",
+    lang: str | None = None,
 ) -> dict[str, Any] | None:
     weather_config = _weather_config(conn)
     geocoding_url = weather_config.get("geocoding_url", OPEN_METEO_GEO_URL)
@@ -444,9 +482,85 @@ async def fetch_weather_data(
         return None
 
     snapshot = build_weather_snapshot(geo, forecast, speech_lang=speech_lang)
+    snapshot["raw"] = build_weather_raw_payload(geo, forecast)
     snapshot["requested_location"] = requested
     snapshot["resolved_name"] = resolved_name
     return snapshot
+
+
+def _clean_llm_weather_reply(text: str) -> str:
+    from core.utils.robot_move_codec import split_robot_move_tags
+    from core.utils.weather_tag_codec import strip_wx_tags
+
+    cleaned, _ = split_robot_move_tags(text or "", trim_edges=True)
+    return strip_wx_tags(cleaned, trim_edges=True).strip()
+
+
+def _weather_naturalize_system_prompt(*, locale: str, character_name: str) -> str:
+    language = {"en": "English", "vi": "Vietnamese"}.get(locale, "Vietnamese")
+    return (
+        f"You are {character_name}, a warm voice assistant. "
+        f"Turn Open-Meteo weather JSON into ONE short natural {language} reply for text-to-speech.\n"
+        "Rules:\n"
+        "- 2-3 sentences max; conversational, friendly.\n"
+        "- Use ONLY facts from the JSON (place, current temp/condition, today's high/low).\n"
+        "- Do not invent numbers or conditions.\n"
+        "- No markdown, lists, emojis, or control tags (wx:, mv:, vol:, mem:).\n"
+        "- Speak temperatures naturally (e.g. Vietnamese: \"khoảng 34 độ\").\n"
+        "Reply with the spoken text only."
+    )
+
+
+async def naturalize_weather_speech(
+    conn: "ConnectionHandler",
+    location: str | None = None,
+    *,
+    locale: str = "vi",
+) -> str | None:
+    """Fetch Open-Meteo data and ask the LLM for a natural spoken weather reply."""
+    from core.characters.character_registry import get_active_character, get_display_name
+
+    requested = (location or "").strip() or None
+    snapshot = await fetch_weather_data(conn, requested, locale=locale)
+    if not snapshot:
+        return None
+
+    raw = snapshot.get("raw")
+    llm = getattr(conn, "llm", None)
+    if llm and raw:
+        character_id = get_active_character(conn)
+        character_name = get_display_name(character_id) if character_id else "Kira"
+        system_prompt = _weather_naturalize_system_prompt(
+            locale=locale, character_name=character_name
+        )
+        user_prompt = json.dumps(raw, ensure_ascii=False, indent=2)
+        try:
+            loop = asyncio.get_running_loop()
+            reply = await loop.run_in_executor(
+                None,
+                lambda: llm.response_no_stream(
+                    system_prompt,
+                    user_prompt,
+                    max_tokens=160,
+                    temperature=0.35,
+                ),
+            )
+            cleaned = _clean_llm_weather_reply(reply)
+            if cleaned:
+                return cleaned
+            logger.bind(tag=TAG).warning(
+                f"LLM weather reply empty after clean; fallback. raw={reply!r}"
+            )
+        except Exception as exc:
+            logger.bind(tag=TAG).error(f"LLM weather naturalize failed: {exc}")
+
+    return format_weather_speech(
+        city_name=snapshot["city_name"],
+        current_abstract=snapshot["current_abstract"],
+        temps_list=snapshot["temps_list"],
+        locale=locale,
+        requested_location=snapshot.get("requested_location"),
+    )
 
 
 async def fetch_weather_speech(
@@ -455,29 +569,27 @@ async def fetch_weather_speech(
     *,
     locale: str = "vi",
 ) -> str | None:
-    """Fetch weather for wx: tag dispatch. Returns TTS-ready text or None on failure."""
+    """Fetch weather for wx: tag dispatch. Returns TTS-ready natural language text."""
     from core.utils.cache.manager import cache_manager, CacheType
 
     requested = (location or "").strip() or None
     resolved = await resolve_weather_location(conn, requested)
-    weather_cache_key = f"openmeteo_speech_{resolved}_{locale}"
+    weather_cache_key = f"openmeteo_natural_{resolved}_{locale}"
     cached = cache_manager.get(CacheType.WEATHER, weather_cache_key)
     if cached:
         return cached
 
-    snapshot = await fetch_weather_data(conn, requested, locale=locale)
-    if not snapshot:
-        return None
-
-    speech = format_weather_speech(
-        city_name=snapshot["city_name"],
-        current_abstract=snapshot["current_abstract"],
-        temps_list=snapshot["temps_list"],
-        locale=locale,
-        requested_location=snapshot.get("requested_location"),
-    )
-    cache_manager.set(CacheType.WEATHER, weather_cache_key, speech)
+    speech = await naturalize_weather_speech(conn, requested, locale=locale)
+    if speech:
+        cache_manager.set(CacheType.WEATHER, weather_cache_key, speech)
     return speech
+
+
+def format_weather_report_for_llm(raw: dict[str, Any]) -> str:
+    return (
+        "Open-Meteo weather data (answer the user naturally using these facts only):\n"
+        + json.dumps(raw, ensure_ascii=False, indent=2)
+    )
 
 
 @register_function("get_weather", GET_WEATHER_FUNCTION_DESC, ToolType.SYSTEM_CTL)
@@ -491,9 +603,8 @@ async def get_weather(conn: "ConnectionHandler", location: str = None, lang: str
     if cached_weather_report:
         return ActionResponse(Action.REQLLM, cached_weather_report, None)
 
-    snapshot = await fetch_weather_data(
-        conn, location, locale="en" if speech_lang == "en" else "vi", lang=lang
-    )
+    locale = "en" if speech_lang == "en" else "vi"
+    snapshot = await fetch_weather_data(conn, location, locale=locale, lang=lang)
     if not snapshot:
         if speech_lang == "zh":
             msg = f"未找到相关的城市: {resolved}，请确认地点是否正确"
@@ -503,12 +614,6 @@ async def get_weather(conn: "ConnectionHandler", location: str = None, lang: str
             msg = f"Không tìm thấy thời tiết cho: {resolved}"
         return ActionResponse(Action.REQLLM, msg, None)
 
-    weather_report = format_weather_report(
-        city_name=snapshot["city_name"],
-        current_abstract=snapshot["current_abstract"],
-        current_basic=snapshot["current_basic"],
-        temps_list=snapshot["temps_list"],
-        speech_lang=speech_lang,
-    )
+    weather_report = format_weather_report_for_llm(snapshot["raw"])
     cache_manager.set(CacheType.WEATHER, weather_cache_key, weather_report)
     return ActionResponse(Action.REQLLM, weather_report, None)

@@ -74,7 +74,7 @@ def weather_tags_prompt(*, example_tone: str = "kira") -> str:
     return f"""## Weather lookup (Open-Meteo — tag triggers fetch)
 When the user asks about **weather** (thời tiết, mưa, nắng, nóng, lạnh, forecast):
 1. Reply with a **short natural sentence** (do not invent numbers — you do not know the weather yet).
-2. Append **`wx:<place>`** or **`wx:local`** at the **very end** (stripped before TTS). Server fetches real data and speaks the result right after.
+2. Append **`wx:<place>`** or **`wx:local`** at the **very end** (stripped before TTS). Server fetches Open-Meteo data and speaks a **natural summary** right after (not raw numbers in your reply).
 
 | User asks | Tag |
 |-----------|-----|

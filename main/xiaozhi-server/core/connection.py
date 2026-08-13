@@ -1046,7 +1046,7 @@ class ConnectionHandler:
             return
 
         loc_key = "" if location is None else str(location)
-        dedupe_key = (label or "assistant", loc_key)
+        dedupe_key = loc_key
         if not hasattr(self, "_executed_weather_lookups"):
             self._executed_weather_lookups = set()
         if dedupe_key in self._executed_weather_lookups:
@@ -1101,11 +1101,13 @@ class ConnectionHandler:
         location = extract_weather_location_from_assistant_text(text)
         if location is None:
             return False
+        loc_key = "" if location is None else str(location)
+        queue_label = f"wx:{loc_key or 'local'}"
         if defer_post_tts:
             self._schedule_post_tts_action(
-                f"wx:{label or 'assistant'}",
-                lambda loc=location, l=label: self._dispatch_weather_lookup(
-                    loc, label=l or "assistant"
+                queue_label,
+                lambda loc=location: self._dispatch_weather_lookup(
+                    loc, label=label or "assistant"
                 ),
             )
             return True
@@ -1690,19 +1692,21 @@ class ConnectionHandler:
         )
         from core.utils.volume_tag_codec import strip_vol_tags
         from core.utils.tof_tag_codec import strip_tof_tags
-        from core.utils.weather_tag_codec import strip_wx_tags
+        from core.utils.weather_tag_codec import hold_incomplete_wx_suffix, strip_wx_tags
 
         if flush_hold:
             held_mv = getattr(self, "_move_tag_stream_hold", "") or ""
             held_char = getattr(self, "_char_tag_stream_hold", "") or ""
             held_mem = getattr(self, "_mem_tag_stream_hold", "") or ""
             held_sleep = getattr(self, "_sleep_tag_stream_hold", "") or ""
+            held_wx = getattr(self, "_wx_tag_stream_hold", "") or ""
             self._move_tag_stream_hold = ""
             self._char_tag_stream_hold = ""
             self._mem_tag_stream_hold = ""
             self._sleep_tag_stream_hold = ""
-            if held_mv or held_char or held_mem or held_sleep:
-                text = held_mv + held_char + held_mem + held_sleep + (text or "")
+            self._wx_tag_stream_hold = ""
+            if held_mv or held_char or held_mem or held_sleep or held_wx:
+                text = held_mv + held_char + held_mem + held_sleep + held_wx + (text or "")
 
         if not text and not flush_hold:
             return
@@ -1714,9 +1718,13 @@ class ConnectionHandler:
         work, char_hold = hold_incomplete_char_suffix(raw_chunk)
         work, mem_hold = hold_incomplete_mem_suffix(work)
         work, sleep_hold = hold_incomplete_sleep_suffix(work)
+        work, wx_hold = hold_incomplete_wx_suffix(
+            work, allow_complete=flush_hold
+        )
         self._char_tag_stream_hold = char_hold
         self._mem_tag_stream_hold = mem_hold
         self._sleep_tag_stream_hold = sleep_hold
+        self._wx_tag_stream_hold = wx_hold
 
         if flush_hold and work:
             cleaned, steps = finalize_stream_text_for_tts(
@@ -1760,9 +1768,6 @@ class ConnectionHandler:
             self._dispatch_tof_from_assistant_text(
                 work, label="tts_stream", defer_post_tts=True
             )
-            self._dispatch_wx_from_assistant_text(
-                work, label="tts_stream", defer_post_tts=True
-            )
         cleaned = strip_tof_tags(cleaned or "", trim_edges=False)
         cleaned = strip_wx_tags(cleaned or "", trim_edges=False)
         cleaned = strip_vol_tags(cleaned or "", trim_edges=False)
@@ -1798,9 +1803,6 @@ class ConnectionHandler:
             pending, label="da_tail", defer_post_tts=True
         )
         self._dispatch_tof_from_assistant_text(
-            pending, label="da_tail", defer_post_tts=True
-        )
-        self._dispatch_wx_from_assistant_text(
             pending, label="da_tail", defer_post_tts=True
         )
         tts_part, steps = finalize_stream_text_for_tts(
@@ -2392,6 +2394,7 @@ class ConnectionHandler:
             self._char_tag_stream_hold = ""
             self._mem_tag_stream_hold = ""
             self._sleep_tag_stream_hold = ""
+            self._wx_tag_stream_hold = ""
             self._robot_move_sequence_queue = []
             self._robot_move_in_flight = False
             self._robot_move_pump_scheduled = False
@@ -2540,9 +2543,6 @@ class ConnectionHandler:
                                         chunk, label="da_stream", defer_post_tts=True
                                     )
                                     self._dispatch_tof_from_assistant_text(
-                                        chunk, label="da_stream", defer_post_tts=True
-                                    )
-                                    self._dispatch_wx_from_assistant_text(
                                         chunk, label="da_stream", defer_post_tts=True
                                     )
                                     if steps:

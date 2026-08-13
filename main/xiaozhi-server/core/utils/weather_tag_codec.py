@@ -42,6 +42,21 @@ def extract_weather_location_from_assistant_text(text: str) -> str | None:
     return _normalize_wx_location(match.group(1))
 
 
+def hold_incomplete_wx_suffix(
+    text: str, *, allow_complete: bool = False
+) -> tuple[str, str]:
+    """Hold trailing wx:… during streaming so partial locations are not spoken or dispatched."""
+    if not text:
+        return "", ""
+    stripped = text.rstrip()
+    if allow_complete and extract_weather_location_from_assistant_text(stripped) is not None:
+        return text, ""
+    match = re.search(r"\bwx\s*:.*$", stripped, re.IGNORECASE)
+    if match:
+        return stripped[: match.start()], stripped[match.start() :]
+    return text, ""
+
+
 def strip_wx_tags(text: str, *, trim_edges: bool = False) -> str:
     if not text:
         return ""
