@@ -1,15 +1,44 @@
 import httpx
-from bs4 import BeautifulSoup
 from config.logger import setup_logging
 from plugins_func.register import register_function, ToolType, ActionResponse, Action
 from core.utils.util import get_ip_info
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from core.connection import ConnectionHandler
 
 TAG = __name__
 logger = setup_logging()
+
+OPEN_METEO_GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
+OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; xiaozhi-blue/1.0; +https://github.com/xinnan-tech/xiaozhi-esp32-server)"
+    )
+}
+
+# Common VN aliases — Open-Meteo may resolve "Sài Gòn" to HK without these.
+LOCATION_ALIASES: dict[str, str] = {
+    "sài gòn": "Ho Chi Minh",
+    "saigon": "Ho Chi Minh",
+    "sai gon": "Ho Chi Minh",
+    "tp hcm": "Ho Chi Minh",
+    "tphcm": "Ho Chi Minh",
+    "hcm": "Ho Chi Minh",
+    "hồ chí minh": "Ho Chi Minh",
+    "ho chi minh city": "Ho Chi Minh",
+    "thành phố hồ chí minh": "Ho Chi Minh",
+    "hà nội": "Hanoi",
+    "ha noi": "Hanoi",
+    "đà nẵng": "Da Nang",
+    "da nang": "Da Nang",
+    "huế": "Hue",
+    "hue": "Hue",
+    "cần thơ": "Can Tho",
+    "can tho": "Can Tho",
+}
 
 GET_WEATHER_FUNCTION_DESC = {
     "type": "function",
@@ -37,128 +66,245 @@ GET_WEATHER_FUNCTION_DESC = {
     },
 }
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
-    )
+# WMO weather interpretation codes (Open-Meteo)
+_WMO_VI: dict[int, str] = {
+    0: "trời quang",
+    1: "hơi mây",
+    2: "có mây",
+    3: "nhiều mây",
+    45: "sương mù",
+    48: "sương mù đóng băng",
+    51: "mưa phùn nhẹ",
+    53: "mưa phùn",
+    55: "mưa phùn dày",
+    56: "mưa phùn lạnh nhẹ",
+    57: "mưa phùn lạnh",
+    61: "mưa nhẹ",
+    63: "mưa vừa",
+    65: "mưa to",
+    66: "mưa lạnh nhẹ",
+    67: "mưa lạnh",
+    71: "tuyết nhẹ",
+    73: "tuyết vừa",
+    75: "tuyết dày",
+    77: "hạt tuyết",
+    80: "mưa rào nhẹ",
+    81: "mưa rào",
+    82: "mưa rào mạnh",
+    85: "mưa tuyết nhẹ",
+    86: "mưa tuyết",
+    95: "dông",
+    96: "dông có mưa đá",
+    99: "dông mưa đá mạnh",
 }
 
-# 天气代码 https://dev.qweather.com/docs/resource/icons/#weather-icons
-WEATHER_CODE_MAP = {
-    "100": "晴",
-    "101": "多云",
-    "102": "少云",
-    "103": "晴间多云",
-    "104": "阴",
-    "150": "晴",
-    "151": "多云",
-    "152": "少云",
-    "153": "晴间多云",
-    "300": "阵雨",
-    "301": "强阵雨",
-    "302": "雷阵雨",
-    "303": "强雷阵雨",
-    "304": "雷阵雨伴有冰雹",
-    "305": "小雨",
-    "306": "中雨",
-    "307": "大雨",
-    "308": "极端降雨",
-    "309": "毛毛雨/细雨",
-    "310": "暴雨",
-    "311": "大暴雨",
-    "312": "特大暴雨",
-    "313": "冻雨",
-    "314": "小到中雨",
-    "315": "中到大雨",
-    "316": "大到暴雨",
-    "317": "暴雨到大暴雨",
-    "318": "大暴雨到特大暴雨",
-    "350": "阵雨",
-    "351": "强阵雨",
-    "399": "雨",
-    "400": "小雪",
-    "401": "中雪",
-    "402": "大雪",
-    "403": "暴雪",
-    "404": "雨夹雪",
-    "405": "雨雪天气",
-    "406": "阵雨夹雪",
-    "407": "阵雪",
-    "408": "小到中雪",
-    "409": "中到大雪",
-    "410": "大到暴雪",
-    "456": "阵雨夹雪",
-    "457": "阵雪",
-    "499": "雪",
-    "500": "薄雾",
-    "501": "雾",
-    "502": "霾",
-    "503": "扬沙",
-    "504": "浮尘",
-    "507": "沙尘暴",
-    "508": "强沙尘暴",
-    "509": "浓雾",
-    "510": "强浓雾",
-    "511": "中度霾",
-    "512": "重度霾",
-    "513": "严重霾",
-    "514": "大雾",
-    "515": "特强浓雾",
-    "900": "热",
-    "901": "冷",
-    "999": "未知",
+_WMO_EN: dict[int, str] = {
+    0: "clear",
+    1: "mainly clear",
+    2: "partly cloudy",
+    3: "overcast",
+    45: "fog",
+    48: "rime fog",
+    51: "light drizzle",
+    53: "drizzle",
+    55: "dense drizzle",
+    56: "light freezing drizzle",
+    57: "freezing drizzle",
+    61: "light rain",
+    63: "moderate rain",
+    65: "heavy rain",
+    66: "light freezing rain",
+    67: "freezing rain",
+    71: "light snow",
+    73: "moderate snow",
+    75: "heavy snow",
+    77: "snow grains",
+    80: "light showers",
+    81: "showers",
+    82: "heavy showers",
+    85: "light snow showers",
+    86: "snow showers",
+    95: "thunderstorm",
+    96: "thunderstorm with hail",
+    99: "heavy hail thunderstorm",
+}
+
+_WMO_ZH: dict[int, str] = {
+    0: "晴",
+    1: "大部晴朗",
+    2: "多云",
+    3: "阴",
+    45: "雾",
+    48: "雾凇",
+    51: "小毛毛雨",
+    53: "毛毛雨",
+    55: "大毛毛雨",
+    56: "小冻毛毛雨",
+    57: "冻毛毛雨",
+    61: "小雨",
+    63: "中雨",
+    65: "大雨",
+    66: "小冻雨",
+    67: "冻雨",
+    71: "小雪",
+    73: "中雪",
+    75: "大雪",
+    77: "雪粒",
+    80: "小阵雨",
+    81: "阵雨",
+    82: "大阵雨",
+    85: "小阵雪",
+    86: "阵雪",
+    95: "雷暴",
+    96: "雷暴伴冰雹",
+    99: "强雷暴伴冰雹",
 }
 
 
-async def fetch_city_info(location, api_key, api_host):
-    url = f"https://{api_host}/geo/v2/city/lookup?key={api_key}&location={location}&lang=zh"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
-        response = await client.get(url, headers=HEADERS)
-    data = response.json()
-    if data.get("error") is not None:
-        logger.bind(tag=TAG).error(
-            f"获取天气失败，原因：{data.get('error', {}).get('detail')}"
-        )
+def _weather_config(conn: "ConnectionHandler") -> dict[str, Any]:
+    return conn.config.get("plugins", {}).get("get_weather", {})
+
+
+def _normalize_location_query(location: str) -> str:
+    key = location.strip().casefold()
+    return LOCATION_ALIASES.get(key, location.strip())
+
+
+def _speech_lang(*, locale: str = "vi", lang: str = "zh_CN") -> str:
+    if locale == "en" or lang.startswith("en"):
+        return "en"
+    if lang.startswith("zh"):
+        return "zh"
+    return "vi"
+
+
+def _geo_language(speech_lang: str) -> str:
+    return {"en": "en", "zh": "zh"}.get(speech_lang, "vi")
+
+
+def wmo_label(code: int, speech_lang: str) -> str:
+    table = {"en": _WMO_EN, "zh": _WMO_ZH}.get(speech_lang, _WMO_VI)
+    return table.get(int(code), table.get(95, "unknown"))
+
+
+def _round_temp(value: float | int | None) -> int | None:
+    if value is None:
         return None
-    return data.get("location", [])[0] if data.get("location") else None
+    return int(round(float(value)))
 
 
-async def fetch_weather_page(url):
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
-        response = await client.get(url, headers=HEADERS)
-    return BeautifulSoup(response.text, "html.parser") if response.status_code == 200 else None
+async def geocode_place(
+    name: str,
+    *,
+    language: str = "vi",
+    country_code: str | None = None,
+    geocoding_url: str = OPEN_METEO_GEO_URL,
+) -> dict[str, Any] | None:
+    params: dict[str, Any] = {"name": name, "count": 5, "language": language}
+    if country_code:
+        params["countryCode"] = country_code
+    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0)) as client:
+        response = await client.get(geocoding_url, params=params, headers=HEADERS)
+    if response.status_code != 200:
+        logger.bind(tag=TAG).error(f"Open-Meteo geocode HTTP {response.status_code}")
+        return None
+    data = response.json()
+    if data.get("error"):
+        logger.bind(tag=TAG).error(f"Open-Meteo geocode error: {data.get('reason')}")
+        return None
+    results = data.get("results") or []
+    return results[0] if results else None
 
 
-def parse_weather_info(soup):
-    city_name = soup.select_one("h1.c-submenu__location").get_text(strip=True)
+async def resolve_geocode(
+    location_name: str,
+    *,
+    speech_lang: str,
+    prefer_country: str | None = "VN",
+    geocoding_url: str = OPEN_METEO_GEO_URL,
+) -> dict[str, Any] | None:
+    query = _normalize_location_query(location_name)
+    language = _geo_language(speech_lang)
 
-    current_abstract = soup.select_one(".c-city-weather-current .current-abstract")
-    current_abstract = (
-        current_abstract.get_text(strip=True) if current_abstract else "未知"
+    geo = await geocode_place(
+        query, language=language, country_code=prefer_country, geocoding_url=geocoding_url
     )
+    if geo:
+        return geo
 
-    current_basic = {}
-    for item in soup.select(
-        ".c-city-weather-current .current-basic .current-basic___item"
-    ):
-        parts = item.get_text(strip=True, separator=" ").split(" ")
-        if len(parts) == 2:
-            key, value = parts[1], parts[0]
-            current_basic[key] = value
+    geo = await geocode_place(query, language=language, geocoding_url=geocoding_url)
+    if geo:
+        return geo
 
-    temps_list = []
-    for row in soup.select(".city-forecast-tabs__row")[:7]:  # 取前7天的数据
-        date = row.select_one(".date-bg .date").get_text(strip=True)
-        weather_code = (
-            row.select_one(".date-bg .icon")["src"].split("/")[-1].split(".")[0]
+    if prefer_country and "," not in query:
+        return await geocode_place(
+            f"{query}, {prefer_country}",
+            language=language,
+            country_code=prefer_country,
+            geocoding_url=geocoding_url,
         )
-        weather = WEATHER_CODE_MAP.get(weather_code, "未知")
-        temps = [span.get_text(strip=True) for span in row.select(".tmp-cont .temp")]
-        high_temp, low_temp = (temps[0], temps[-1]) if len(temps) >= 2 else (None, None)
-        temps_list.append((date, weather, high_temp, low_temp))
+    return None
 
-    return city_name, current_abstract, current_basic, temps_list
+
+async def fetch_open_meteo_forecast(
+    lat: float,
+    lon: float,
+    *,
+    timezone: str | None = None,
+    forecast_url: str = OPEN_METEO_FORECAST_URL,
+) -> dict[str, Any] | None:
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "current": "temperature_2m,weather_code",
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+        "timezone": timezone or "auto",
+        "forecast_days": 7,
+    }
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
+        response = await client.get(forecast_url, params=params, headers=HEADERS)
+    if response.status_code != 200:
+        logger.bind(tag=TAG).error(f"Open-Meteo forecast HTTP {response.status_code}")
+        return None
+    data = response.json()
+    if not data.get("current") or not data.get("daily"):
+        logger.bind(tag=TAG).error("Open-Meteo forecast missing current/daily fields")
+        return None
+    return data
+
+
+def build_weather_snapshot(
+    geo: dict[str, Any], forecast: dict[str, Any], *, speech_lang: str
+) -> dict[str, Any]:
+    current = forecast["current"]
+    daily = forecast["daily"]
+    temp = _round_temp(current.get("temperature_2m"))
+    condition = wmo_label(current.get("weather_code", 0), speech_lang)
+
+    if speech_lang == "en":
+        current_abstract = f"{temp}°C, {condition}" if temp is not None else condition
+    elif speech_lang == "zh":
+        current_abstract = f"{temp}度，{condition}" if temp is not None else condition
+    else:
+        current_abstract = f"{temp} độ, {condition}" if temp is not None else condition
+
+    temps_list: list[tuple[str, str, int | None, int | None]] = []
+    for idx, date in enumerate(daily.get("time") or []):
+        code = (daily.get("weather_code") or [0])[idx]
+        high = _round_temp((daily.get("temperature_2m_max") or [None])[idx])
+        low = _round_temp((daily.get("temperature_2m_min") or [None])[idx])
+        temps_list.append((date, wmo_label(code, speech_lang), high, low))
+
+    current_basic: dict[str, str] = {}
+    if temp is not None:
+        current_basic["temperature"] = f"{temp}°C"
+
+    return {
+        "city_name": geo.get("name") or "",
+        "current_abstract": current_abstract,
+        "current_basic": current_basic,
+        "temps_list": temps_list,
+    }
 
 
 async def resolve_weather_location(
@@ -166,8 +312,8 @@ async def resolve_weather_location(
 ) -> str:
     from core.utils.cache.manager import cache_manager, CacheType
 
-    weather_config = conn.config.get("plugins", {}).get("get_weather", {})
-    default_location = weather_config.get("default_location", "广州")
+    weather_config = _weather_config(conn)
+    default_location = weather_config.get("default_location", "Ho Chi Minh City")
     client_ip = conn.client_ip
 
     if location and str(location).strip():
@@ -201,19 +347,106 @@ def format_weather_speech(
     if locale == "en":
         if today:
             _date, weather, high, low = today
-            return (
-                f"{display_city}: now {current_abstract}. "
-                f"Today {weather}, {low} to {high}."
-            )
+            if high is not None and low is not None:
+                return (
+                    f"{display_city}: now {current_abstract}. "
+                    f"Today {weather}, {low} to {high} degrees."
+                )
+            return f"{display_city}: now {current_abstract}. Today {weather}."
         return f"{display_city}: {current_abstract}."
 
     if today:
         _date, weather, high, low = today
-        return (
-            f"{display_city}: hiện {current_abstract}. "
-            f"Hôm nay {weather}, {low} đến {high} độ."
-        )
+        if high is not None and low is not None:
+            return (
+                f"{display_city}: hiện {current_abstract}. "
+                f"Hôm nay {weather}, {low} đến {high} độ."
+            )
+        return f"{display_city}: hiện {current_abstract}. Hôm nay {weather}."
     return f"{display_city}: hiện {current_abstract}."
+
+
+def format_weather_report(
+    *,
+    city_name: str,
+    current_abstract: str,
+    current_basic: dict[str, str],
+    temps_list: list,
+    speech_lang: str,
+) -> str:
+    if speech_lang == "en":
+        weather_report = f"Location: {city_name}\n\nCurrent: {current_abstract}\n"
+        if current_basic:
+            weather_report += "Details:\n"
+            for key, value in current_basic.items():
+                weather_report += f"  · {key}: {value}\n"
+        weather_report += "\n7-day forecast:\n"
+        for date, weather, high, low in temps_list:
+            weather_report += f"{date}: {weather}, {low}~{high}°C\n"
+        return weather_report
+
+    if speech_lang == "zh":
+        weather_report = f"您查询的位置是：{city_name}\n\n当前天气: {current_abstract}\n"
+        if current_basic:
+            weather_report += "详细参数：\n"
+            for key, value in current_basic.items():
+                weather_report += f"  · {key}: {value}\n"
+        weather_report += "\n未来7天预报：\n"
+        for date, weather, high, low in temps_list:
+            weather_report += f"{date}: {weather}，气温 {low}~{high}°C\n"
+        weather_report += "\n（如需某一天的具体天气，请告诉我日期）"
+        return weather_report
+
+    weather_report = f"Địa điểm: {city_name}\n\nHiện tại: {current_abstract}\n"
+    if current_basic:
+        weather_report += "Chi tiết:\n"
+        for key, value in current_basic.items():
+            weather_report += f"  · {key}: {value}\n"
+    weather_report += "\nDự báo 7 ngày:\n"
+    for date, weather, high, low in temps_list:
+        weather_report += f"{date}: {weather}, {low}~{high}°C\n"
+    return weather_report
+
+
+async def fetch_weather_data(
+    conn: "ConnectionHandler",
+    location: str | None,
+    *,
+    locale: str = "vi",
+    lang: str = "zh_CN",
+) -> dict[str, Any] | None:
+    weather_config = _weather_config(conn)
+    geocoding_url = weather_config.get("geocoding_url", OPEN_METEO_GEO_URL)
+    forecast_url = weather_config.get("forecast_url", OPEN_METEO_FORECAST_URL)
+    prefer_country = weather_config.get("prefer_country", "VN") or None
+
+    requested = (location or "").strip() or None
+    resolved_name = await resolve_weather_location(conn, requested)
+    speech_lang = _speech_lang(locale=locale, lang=lang)
+
+    geo = await resolve_geocode(
+        resolved_name,
+        speech_lang=speech_lang,
+        prefer_country=prefer_country,
+        geocoding_url=geocoding_url,
+    )
+    if not geo:
+        logger.bind(tag=TAG).error(f"Open-Meteo geocode miss: {resolved_name!r}")
+        return None
+
+    forecast = await fetch_open_meteo_forecast(
+        geo["latitude"],
+        geo["longitude"],
+        timezone=geo.get("timezone"),
+        forecast_url=forecast_url,
+    )
+    if not forecast:
+        return None
+
+    snapshot = build_weather_snapshot(geo, forecast, speech_lang=speech_lang)
+    snapshot["requested_location"] = requested
+    snapshot["resolved_name"] = resolved_name
+    return snapshot
 
 
 async def fetch_weather_speech(
@@ -225,31 +458,23 @@ async def fetch_weather_speech(
     """Fetch weather for wx: tag dispatch. Returns TTS-ready text or None on failure."""
     from core.utils.cache.manager import cache_manager, CacheType
 
-    weather_config = conn.config.get("plugins", {}).get("get_weather", {})
-    api_host = weather_config.get("api_host", "mj7p3y7naa.re.qweatherapi.com")
-    api_key = weather_config.get("api_key", "a861d0d5e7bf4ee1a83d9a9e4f96d4da")
     requested = (location or "").strip() or None
     resolved = await resolve_weather_location(conn, requested)
-    lang = "en_US" if locale == "en" else "zh_CN"
-
-    weather_cache_key = f"speech_{resolved}_{locale}"
+    weather_cache_key = f"openmeteo_speech_{resolved}_{locale}"
     cached = cache_manager.get(CacheType.WEATHER, weather_cache_key)
     if cached:
         return cached
 
-    city_info = await fetch_city_info(resolved, api_key, api_host)
-    if not city_info:
+    snapshot = await fetch_weather_data(conn, requested, locale=locale)
+    if not snapshot:
         return None
-    soup = await fetch_weather_page(city_info["fxLink"])
-    if not soup:
-        return None
-    city_name, current_abstract, _current_basic, temps_list = parse_weather_info(soup)
+
     speech = format_weather_speech(
-        city_name=city_name,
-        current_abstract=current_abstract,
-        temps_list=temps_list,
+        city_name=snapshot["city_name"],
+        current_abstract=snapshot["current_abstract"],
+        temps_list=snapshot["temps_list"],
         locale=locale,
-        requested_location=requested,
+        requested_location=snapshot.get("requested_location"),
     )
     cache_manager.set(CacheType.WEATHER, weather_cache_key, speech)
     return speech
@@ -259,43 +484,31 @@ async def fetch_weather_speech(
 async def get_weather(conn: "ConnectionHandler", location: str = None, lang: str = "zh_CN"):
     from core.utils.cache.manager import cache_manager, CacheType
 
-    weather_config = conn.config.get("plugins", {}).get("get_weather", {})
-    api_host = weather_config.get("api_host", "mj7p3y7naa.re.qweatherapi.com")
-    api_key = weather_config.get("api_key", "a861d0d5e7bf4ee1a83d9a9e4f96d4da")
     resolved = await resolve_weather_location(conn, location)
-    weather_cache_key = f"full_weather_{resolved}_{lang}"
+    speech_lang = _speech_lang(lang=lang)
+    weather_cache_key = f"openmeteo_full_{resolved}_{lang}"
     cached_weather_report = cache_manager.get(CacheType.WEATHER, weather_cache_key)
     if cached_weather_report:
         return ActionResponse(Action.REQLLM, cached_weather_report, None)
 
-    city_info = await fetch_city_info(resolved, api_key, api_host)
-    if not city_info:
-        return ActionResponse(
-            Action.REQLLM, f"未找到相关的城市: {resolved}，请确认地点是否正确", None
-        )
-    soup = await fetch_weather_page(city_info["fxLink"])
-    if not soup:
-        return ActionResponse(Action.REQLLM, None, "请求失败")
-    city_name, current_abstract, current_basic, temps_list = parse_weather_info(soup)
+    snapshot = await fetch_weather_data(
+        conn, location, locale="en" if speech_lang == "en" else "vi", lang=lang
+    )
+    if not snapshot:
+        if speech_lang == "zh":
+            msg = f"未找到相关的城市: {resolved}，请确认地点是否正确"
+        elif speech_lang == "en":
+            msg = f"Could not find weather for: {resolved}"
+        else:
+            msg = f"Không tìm thấy thời tiết cho: {resolved}"
+        return ActionResponse(Action.REQLLM, msg, None)
 
-    weather_report = f"您查询的位置是：{city_name}\n\n当前天气: {current_abstract}\n"
-
-    # 添加有效的当前天气参数
-    if current_basic:
-        weather_report += "详细参数：\n"
-        for key, value in current_basic.items():
-            if value != "0":  # 过滤无效值
-                weather_report += f"  · {key}: {value}\n"
-
-    # 添加7天预报
-    weather_report += "\n未来7天预报：\n"
-    for date, weather, high, low in temps_list:
-        weather_report += f"{date}: {weather}，气温 {low}~{high}\n"
-
-    # 提示语
-    weather_report += "\n（如需某一天的具体天气，请告诉我日期）"
-
-    # 缓存完整的天气报告
+    weather_report = format_weather_report(
+        city_name=snapshot["city_name"],
+        current_abstract=snapshot["current_abstract"],
+        current_basic=snapshot["current_basic"],
+        temps_list=snapshot["temps_list"],
+        speech_lang=speech_lang,
+    )
     cache_manager.set(CacheType.WEATHER, weather_cache_key, weather_report)
-
     return ActionResponse(Action.REQLLM, weather_report, None)

@@ -61,14 +61,13 @@ TTS:
 
 tts_timeout: 30
 
-# --- Weather (QWeather — triggered by AI wx: tag, not server prefetch) ---
-# Kira/Lili append wx:Ho Chi Minh / wx:local at end of reply; server fetches after TTS.
-# Free key: https://console.qweather.com/#/apps/create-key/over
-# API host: https://console.qweather.com/setting?lang=zh
+# --- Weather (Open-Meteo — free, no API key; AI wx: tag triggers fetch after TTS) ---
+# Docs: https://open-meteo.com/en/docs
 # default_location: fallback when user says wx:local / wx: and IP geolocation fails
+# prefer_country: geocode bias for VN city names (e.g. Sài Gòn → Ho Chi Minh)
 
 plugins:
   get_weather:
-    api_host: "YOUR_QWEATHER_API_HOST"
-    api_key: "YOUR_QWEATHER_API_KEY"
+    provider: open_meteo
     default_location: "Ho Chi Minh City"
+    prefer_country: "VN"

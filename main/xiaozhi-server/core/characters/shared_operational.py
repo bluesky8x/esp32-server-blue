@@ -71,7 +71,7 @@ def weather_tags_prompt(*, example_tone: str = "kira") -> str:
     else:
         example = '✅ *"Dạ, để mình xem thời tiết Sài Gòn nha wx:Ho Chi Minh"*'
         local_example = '✅ *"Mình xem thời tiết ở đây nha wx:local"*'
-    return f"""## Weather lookup (QWeather — tag triggers fetch)
+    return f"""## Weather lookup (Open-Meteo — tag triggers fetch)
 When the user asks about **weather** (thời tiết, mưa, nắng, nóng, lạnh, forecast):
 1. Reply with a **short natural sentence** (do not invent numbers — you do not know the weather yet).
 2. Append **`wx:<place>`** or **`wx:local`** at the **very end** (stripped before TTS). Server fetches real data and speaks the result right after.
