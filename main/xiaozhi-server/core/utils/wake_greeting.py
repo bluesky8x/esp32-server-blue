@@ -130,6 +130,7 @@ def _begin_greeting_tts(conn: "ConnectionHandler") -> None:
     """Standard tts start — only after device is already in listening (touch flow)."""
     conn.client_abort = False
     conn.client_is_speaking = True
+    conn._startup_greeting_in_progress = True
     loop = getattr(conn, "loop", None)
     if loop is None:
         return
@@ -189,7 +190,6 @@ def speak_wake_greeting(
     conn: "ConnectionHandler", character_id: str, wake_text: str
 ) -> None:
     """Play a varied greeting via normal TTS (device listening first, then speak)."""
-    conn._startup_greeting_sent = True
     from core.utils.language_runtime import update_locale_from_user_text
 
     update_locale_from_user_text(conn, wake_text or "", reason="wake")
@@ -217,6 +217,18 @@ async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:
         return
 
     logger = getattr(conn, "logger", None)
+
+    lock = getattr(conn, "_startup_greeting_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        conn._startup_greeting_lock = lock
+
+    async with lock:
+        if getattr(conn, "_startup_greeting_sent", False):
+            return
+        # Claim slot before delay so concurrent listen/start cannot double-greet.
+        conn._startup_greeting_sent = True
+
     start = time.time()
     while time.time() - start < 10:
         if conn.tts and conn.asr is not None and conn.vad is not None:
@@ -227,9 +239,7 @@ async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:
             logger.bind(tag="wake_greeting").warning(
                 "Startup greeting skipped — TTS/ASR/VAD not ready within 10s"
             )
-        return
-
-    if getattr(conn, "_startup_greeting_sent", False):
+        conn._startup_greeting_sent = False
         return
 
     delay = STARTUP_GREETING_DELAY_SEC
@@ -246,9 +256,6 @@ async def maybe_speak_startup_greeting(conn: "ConnectionHandler") -> None:
                 f"Startup greeting delay {delay:.1f}s (device listen settle)"
             )
         await asyncio.sleep(delay)
-
-    if getattr(conn, "_startup_greeting_sent", False):
-        return
 
     char_id = (
         getattr(conn, "active_character", None)

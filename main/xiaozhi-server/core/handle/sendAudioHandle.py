@@ -353,6 +353,10 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
         conn.clearSpeakStatus()
         conn.reset_audio_states()
 
+        if getattr(conn, "_startup_greeting_in_progress", False):
+            conn._startup_greeting_in_progress = False
+            conn.logger.bind(tag=TAG).debug("Startup greeting finished (tts stop)")
+
         if current_sentence_id != conn.sentence_id:
             await conn.websocket.send(json.dumps(message))
             return

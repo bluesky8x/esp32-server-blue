@@ -413,6 +413,7 @@ class ConnectionHandler:
             if (
                 self.client_is_speaking
                 and self.client_listen_mode != "manual"
+                and not getattr(self, "_startup_greeting_in_progress", False)
             ):
                 self.logger.bind(tag=TAG).info(
                     "Device uplink while speaking flag set — clearing stale speaking state"

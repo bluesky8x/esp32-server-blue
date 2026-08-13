@@ -41,6 +41,14 @@ class ListenTextMessageHandler(TextMessageHandler):
             now = time.time()
             last = getattr(conn, "_last_listen_start_at", 0.0)
             debounced = last and (now - last) < LISTEN_START_DEBOUNCE_SEC
+
+            # Duplicate listen/start while startup greeting plays — ignore entirely.
+            if getattr(conn, "_startup_greeting_in_progress", False) and conn.client_is_speaking:
+                conn.logger.bind(tag=TAG).debug(
+                    "listen start ignored — startup greeting in progress"
+                )
+                return
+
             if debounced:
                 conn.logger.bind(tag=TAG).debug(
                     f"listen start debounced ({now - last:.2f}s since last)"
