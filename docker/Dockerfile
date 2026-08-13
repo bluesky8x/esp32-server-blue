@@ -33,23 +33,12 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
     && pip install --no-cache-dir -r requirements.txt --default-timeout=120 --retries 5
 
 COPY main/xiaozhi-server .
+COPY docker/seed_silero_vad.py /tmp/seed_silero_vad.py
 
-# models/ is gitignored in .dockerignore — seed Silero VAD from pip silero_vad for SileroVAD.
+# models/ excluded by .dockerignore — seed Silero VAD from pip silero_vad.
 RUN mkdir -p data tmp models/SenseVoiceSmall \
-    && python - <<'PY'
-import shutil
-from importlib.resources import as_file, files
-from pathlib import Path
-
-dest = Path("models/snakers4_silero-vad/src/silero_vad/data/silero_vad.onnx")
-ref = files("silero_vad.data").joinpath("silero_vad.onnx")
-if not ref.is_file():
-    ref = files("silero_vad").joinpath("data", "silero_vad.onnx")
-dest.parent.mkdir(parents=True, exist_ok=True)
-with as_file(ref) as src:
-    shutil.copy2(src, dest)
-print(f"Silero VAD model ready: {dest} ({dest.stat().st_size} bytes)")
-PY
+    && python /tmp/seed_silero_vad.py \
+    && rm /tmp/seed_silero_vad.py
 
 EXPOSE 8000 8003
 
