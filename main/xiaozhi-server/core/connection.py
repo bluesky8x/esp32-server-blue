@@ -1753,22 +1753,11 @@ class ConnectionHandler:
     def _prepare_llm_text_for_tts(
         self, sentence_id: str | None, text: str, *, trim_edges: bool = False
     ) -> str:
-        from core.utils.memory_tag_codec import (
-            apply_mem_tags_from_assistant_text,
-            strip_mem_tags,
-        )
-        from core.utils.character_switch_codec import (
-            apply_char_switch_from_assistant_text,
-            strip_char_tags,
-        )
-        from core.utils.sleep_tag_codec import (
-            apply_sleep_tag_from_assistant_text,
-            strip_sleep_tag,
-        )
+        from core.utils.memory_tag_codec import apply_mem_tags_from_assistant_text
+        from core.utils.character_switch_codec import apply_char_switch_from_assistant_text
+        from core.utils.sleep_tag_codec import apply_sleep_tag_from_assistant_text
         from core.utils.robot_move_codec import split_robot_move_tags
-        from core.utils.volume_tag_codec import strip_vol_tags
-        from core.utils.tof_tag_codec import strip_tof_tags
-        from core.utils.weather_tag_codec import strip_wx_tags
+        from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
 
         if not text:
             return ""
@@ -1791,12 +1780,7 @@ class ConnectionHandler:
             text, label="prepare_llm_text_for_tts", defer_post_tts=True
         )
         cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
-        cleaned = strip_tof_tags(cleaned, trim_edges=trim_edges)
-        cleaned = strip_wx_tags(cleaned, trim_edges=trim_edges)
-        cleaned = strip_vol_tags(cleaned, trim_edges=trim_edges)
-        cleaned = strip_mem_tags(cleaned, trim_edges=trim_edges)
-        cleaned = strip_char_tags(cleaned, trim_edges=trim_edges)
-        cleaned = strip_sleep_tag(cleaned, trim_edges=trim_edges)
+        cleaned = strip_control_tags_for_tts(cleaned, trim_edges=trim_edges)
         self._dispatch_mv_from_assistant_text(
             sentence_id, text, label="prepare_llm_text_for_tts", defer_post_tts=True
         )
@@ -1809,25 +1793,21 @@ class ConnectionHandler:
         from core.utils.memory_tag_codec import (
             apply_mem_tags_from_assistant_text,
             hold_incomplete_mem_suffix,
-            strip_mem_tags,
         )
         from core.utils.character_switch_codec import (
             apply_char_switch_from_assistant_text,
             hold_incomplete_char_suffix,
-            strip_char_tags,
         )
         from core.utils.sleep_tag_codec import (
             apply_sleep_tag_from_assistant_text,
             hold_incomplete_sleep_suffix,
-            strip_sleep_tag,
         )
         from core.utils.robot_move_codec import (
             finalize_stream_text_for_tts,
             prepare_stream_chunk_for_tts,
         )
-        from core.utils.volume_tag_codec import strip_vol_tags
-        from core.utils.tof_tag_codec import strip_tof_tags
-        from core.utils.weather_tag_codec import hold_incomplete_wx_suffix, strip_wx_tags
+        from core.utils.weather_tag_codec import hold_incomplete_wx_suffix
+        from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
 
         if flush_hold:
             held_mv = getattr(self, "_move_tag_stream_hold", "") or ""
@@ -1903,12 +1883,10 @@ class ConnectionHandler:
             self._dispatch_tof_from_assistant_text(
                 work, label="tts_stream", defer_post_tts=True
             )
-        cleaned = strip_tof_tags(cleaned or "", trim_edges=False)
-        cleaned = strip_wx_tags(cleaned or "", trim_edges=False)
-        cleaned = strip_vol_tags(cleaned or "", trim_edges=False)
-        cleaned = strip_mem_tags(cleaned or "", trim_edges=False)
-        cleaned = strip_char_tags(cleaned or "", trim_edges=False)
-        cleaned = strip_sleep_tag(cleaned or "", trim_edges=False)
+            self._dispatch_wx_from_assistant_text(
+                work, label="tts_stream", defer_post_tts=True
+            )
+        cleaned = strip_control_tags_for_tts(cleaned or "", trim_edges=False)
 
         if cleaned:
             self.tts.tts_text_queue.put(
@@ -1955,14 +1933,9 @@ class ConnectionHandler:
                 sentence_id, tts_part, label="da_tail", defer_post_tts=True
             )
         if tts_part:
-            from core.utils.tof_tag_codec import strip_tof_tags
-            from core.utils.volume_tag_codec import strip_vol_tags
-            from core.utils.weather_tag_codec import strip_wx_tags
+            from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
 
-            tts_part = strip_wx_tags(
-                strip_tof_tags(strip_vol_tags(tts_part, trim_edges=False), trim_edges=False),
-                trim_edges=True,
-            )
+            tts_part = strip_control_tags_for_tts(tts_part, trim_edges=True)
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=sentence_id,
@@ -2694,16 +2667,12 @@ class ConnectionHandler:
                                             defer_post_tts=True,
                                         )
                                     if safe:
-                                        from core.utils.tof_tag_codec import strip_tof_tags
-                                        from core.utils.volume_tag_codec import strip_vol_tags
-                                        from core.utils.weather_tag_codec import strip_wx_tags
+                                        from core.utils.tts_tag_sanitize import (
+                                            strip_control_tags_for_tts,
+                                        )
 
-                                        safe = strip_wx_tags(
-                                            strip_tof_tags(
-                                                strip_vol_tags(safe, trim_edges=False),
-                                                trim_edges=False,
-                                            ),
-                                            trim_edges=False,
+                                        safe = strip_control_tags_for_tts(
+                                            safe, trim_edges=False
                                         )
                                     if safe:
                                         self.tts.tts_text_queue.put(

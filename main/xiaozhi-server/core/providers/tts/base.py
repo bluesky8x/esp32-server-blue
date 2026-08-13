@@ -135,22 +135,14 @@ class TTSProviderBase(ABC):
         self.before_stop_play_files.append((file_audio, text))
 
     def _sanitize_tts_text(self, text: str, sentence_id=None) -> str:
-        """Remove mv:* / char:* tags before speech; dispatch side effects."""
+        """Remove control tags before speech; dispatch side effects where needed."""
         if not text:
             return ""
-        from core.utils.memory_tag_codec import (
-            apply_mem_tags_from_assistant_text,
-            strip_mem_tags,
-        )
-        from core.utils.character_switch_codec import (
-            apply_char_switch_from_assistant_text,
-            strip_char_tags,
-        )
-        from core.utils.sleep_tag_codec import (
-            apply_sleep_tag_from_assistant_text,
-            strip_sleep_tag,
-        )
+        from core.utils.memory_tag_codec import apply_mem_tags_from_assistant_text
+        from core.utils.character_switch_codec import apply_char_switch_from_assistant_text
+        from core.utils.sleep_tag_codec import apply_sleep_tag_from_assistant_text
         from core.utils.robot_move_codec import split_robot_move_steps
+        from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
 
         if self.conn:
             apply_mem_tags_from_assistant_text(
@@ -163,12 +155,10 @@ class TTSProviderBase(ABC):
                 self.conn, text, label="tts_sanitize"
             )
         cleaned, steps = split_robot_move_steps(text, trim_edges=False)
-        cleaned = strip_mem_tags(cleaned, trim_edges=False)
-        cleaned = strip_char_tags(cleaned, trim_edges=False)
-        cleaned = strip_sleep_tag(cleaned, trim_edges=False)
         if steps and self.conn and hasattr(self.conn, "_dispatch_robot_move_steps"):
             sid = sentence_id or getattr(self, "current_sentence_id", None)
             self.conn._dispatch_robot_move_steps(sid, steps)
+        cleaned = strip_control_tags_for_tts(cleaned, trim_edges=False)
         if getattr(self.conn, "normalize_vietnamese_tts", True):
             cleaned = textUtils.normalize_vietnamese_tts_text(cleaned)
         return cleaned
