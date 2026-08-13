@@ -21,6 +21,8 @@ from vieneu import Vieneu
 
 SAMPLE_RATE = 48_000
 DEFAULT_VOICE = os.environ.get("VIENEU_DEFAULT_VOICE", "Ngọc Lan")
+VIENEU_REPO = os.environ.get("VIENEU_REPO", "")
+VIENEU_REF = os.environ.get("VIENEU_REF", "")
 HOST = os.environ.get("VIENEU_HOST", "0.0.0.0")
 PORT = int(os.environ.get("VIENEU_PORT", "8882"))
 
@@ -50,6 +52,32 @@ app = FastAPI(title="VieNeu-TTS OpenAI shim", lifespan=lifespan)
 @app.get("/health")
 def health():
     return {"status": "ok", "engine": "vieneu-v3-turbo-onnx", "sample_rate": SAMPLE_RATE}
+
+
+@app.get("/info")
+def info():
+    """Which git repo/ref this container was built from (verify after rebuild)."""
+    preset_count = 0
+    sample_voices: list[str] = []
+    if vieneu is not None:
+        try:
+            preset = vieneu.list_preset_voices()
+            preset_count = len(preset)
+            for item in preset[:6]:
+                if isinstance(item, (tuple, list)) and len(item) >= 1:
+                    sample_voices.append(str(item[0]))
+                else:
+                    sample_voices.append(str(item))
+        except Exception:
+            pass
+    return {
+        "repo": VIENEU_REPO or None,
+        "ref": VIENEU_REF or None,
+        "default_voice": DEFAULT_VOICE,
+        "preset_voice_count": preset_count,
+        "sample_voices": sample_voices,
+        "upstream_pnnbao": "pnnbao97" in (VIENEU_REPO or "").lower(),
+    }
 
 
 @app.get("/v1/models")
@@ -82,12 +110,31 @@ def _synthesize_wav(text: str, voice: Optional[str]) -> bytes:
     if not text:
         raise HTTPException(status_code=400, detail="input is empty")
 
+    chosen = voice or DEFAULT_VOICE
     chunks = []
-    for chunk in vieneu.infer_stream(text, voice=voice or DEFAULT_VOICE):
-        if chunk is not None and len(chunk):
-            chunks.append(chunk)
+    try:
+        for chunk in vieneu.infer_stream(text, voice=chosen):
+            if chunk is not None and len(chunk):
+                chunks.append(chunk)
+    except Exception as exc:  # noqa: BLE001
+        hint = f"voice={chosen!r}"
+        try:
+            names = [
+                (item[0] if isinstance(item, (tuple, list)) else str(item))
+                for item in vieneu.list_preset_voices()
+            ]
+            hint += f"; available: {', '.join(names[:8])}"
+            if len(names) > 8:
+                hint += ", ..."
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"synthesis failed ({hint}): {exc}") from exc
+
     if not chunks:
-        raise HTTPException(status_code=500, detail="empty synthesis")
+        raise HTTPException(
+            status_code=500,
+            detail=f"empty synthesis for voice={chosen!r} — check GET /voices",
+        )
 
     audio = np.concatenate(chunks)
     pcm = (np.asarray(audio) * 32767).clip(-32768, 32767).astype(np.int16)

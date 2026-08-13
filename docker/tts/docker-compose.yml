@@ -45,6 +45,8 @@ services:
     volumes:
       - vieneu-hf-cache:/root/.cache/huggingface
     environment:
+      VIENEU_REPO: ${VIENEU_REPO:-https://github.com/pnnbao97/VieNeu-TTS.git}
+      VIENEU_REF: ${VIENEU_REF:-main}
       VIENEU_DEFAULT_VOICE: ${VIENEU_DEFAULT_VOICE:-Ngọc Lan}
       HF_HOME: /root/.cache/huggingface
     healthcheck:

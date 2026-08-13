@@ -21,7 +21,14 @@ WORKDIR /opt/vieneu-tts
 
 ARG VIENEU_REPO=https://github.com/pnnbao97/VieNeu-TTS.git
 ARG VIENEU_REF=main
-RUN git clone --depth 1 --branch "${VIENEU_REF}" "${VIENEU_REPO}" .
+ENV VIENEU_REPO=${VIENEU_REPO} \
+    VIENEU_REF=${VIENEU_REF}
+LABEL org.opencontainers.image.source="${VIENEU_REPO}" \
+      vieneu.ref="${VIENEU_REF}"
+# Do not cache clone when VIENEU_REPO / VIENEU_REF change (compose build --no-cache if stuck).
+RUN test -n "${VIENEU_REPO}" && test -n "${VIENEU_REF}" && \
+    echo "Cloning ${VIENEU_REPO} @ ${VIENEU_REF}" && \
+    git clone --depth 1 --branch "${VIENEU_REF}" "${VIENEU_REPO}" .
 
 # Torch-free ONNX stack (v3 Turbo CPU int8)
 RUN uv sync

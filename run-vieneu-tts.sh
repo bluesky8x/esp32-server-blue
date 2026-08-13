@@ -40,6 +40,19 @@ case "$cmd" in
   build)
     "${COMPOSE[@]}" build vieneu-tts
     ;;
+  rebuild)
+    echo "Full rebuild (no cache) — removes old image, re-clones VieNeu repo..."
+    "${COMPOSE[@]}" stop vieneu-tts 2>/dev/null || true
+    docker rm -f blue-vieneu-tts 2>/dev/null || true
+    docker rmi blue-vieneu-tts:latest 2>/dev/null || true
+    "${COMPOSE[@]}" build --no-cache vieneu-tts
+    "${COMPOSE[@]}" up -d vieneu-tts
+    echo "Wait for health, then: $0 info && $0 voices"
+    ;;
+  info)
+    wait_healthy
+    curl -sf "$BASE/info" | python3 -m json.tool
+    ;;
   logs)
     "${COMPOSE[@]}" logs -f --tail=100 vieneu-tts
     ;;
@@ -59,14 +72,16 @@ case "$cmd" in
     ;;
   help|*)
     cat <<EOF
-Usage: $0 {up|down|build|test|voices|logs}
+Usage: $0 {up|down|build|rebuild|test|voices|info|logs}
 
-  up      Build and start VieNeu-TTS on port $PORT
-  test    Synthesize sample Vietnamese WAV
-  voices  List preset voices
-  down    Stop container
-  logs    Follow container logs
-  build   Rebuild image only
+  up       Build and start VieNeu-TTS on port $PORT
+  rebuild  Force clean rebuild (use when voices/repo still look old)
+  info     Show repo/ref baked into running container
+  test     Synthesize sample Vietnamese WAV
+  voices   List preset voices
+  down     Stop container
+  logs     Follow container logs
+  build    Rebuild image only (may reuse Docker cache)
 
 Configure xiaozhi-server data/.config.yaml:
   selected_module.TTS: CustomTTS
@@ -77,6 +92,9 @@ Configure xiaozhi-server data/.config.yaml:
 Env overrides (docker/tts/.env):
   VIENEU_TTS_PORT=$PORT
   VIENEU_DEFAULT_VOICE=$DEFAULT_VOICE
+  VIENEU_REPO=https://github.com/pnnbao97/VieNeu-TTS.git
+  VIENEU_REF=main
+  # If .env still points at xuanhieu fork, rebuild will keep old voices!
 EOF
     ;;
 esac
