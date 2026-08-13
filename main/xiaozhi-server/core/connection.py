@@ -1312,7 +1312,8 @@ class ConnectionHandler:
         volume = getattr(self, "_user_requested_volume", None)
         if volume is None:
             return
-        if getattr(self, "_last_dispatched_volume", None) == volume:
+        # LLM reply already included vol:N — do not apply a conflicting STT guess.
+        if getattr(self, "_last_dispatched_volume", None) is not None:
             return
         if defer_post_tts:
             self._schedule_post_tts_action(
