@@ -9,7 +9,28 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
+from core.utils.character_switch_codec import (
+    apply_char_switch_from_assistant_text,
+    hold_incomplete_char_suffix,
+)
+from core.utils.memory_tag_codec import (
+    apply_mem_tags_from_assistant_text,
+    hold_incomplete_mem_suffix,
+)
+from core.utils.robot_move_codec import (
+    finalize_stream_text_for_tts,
+    prepare_stream_chunk_for_tts,
+    split_robot_move_tags,
+)
+from core.utils.sleep_tag_codec import (
+    apply_sleep_tag_from_assistant_text,
+    hold_incomplete_sleep_suffix,
+)
+from core.utils.tts_tag_sanitize import (
+    may_contain_control_tags,
+    strip_control_tags_for_tts,
+)
+from core.utils.weather_tag_codec import hold_incomplete_wx_suffix
 
 if TYPE_CHECKING:
     from core.connection import ConnectionHandler
@@ -26,6 +47,9 @@ class TagStreamHold:
     def merged_prefix(self) -> str:
         return self.mv + self.char + self.mem + self.sleep + self.wx
 
+    def has_suffix_hold(self) -> bool:
+        return bool(self.char or self.mem or self.sleep or self.wx)
+
     def clear(self) -> None:
         self.mv = ""
         self.wx = ""
@@ -34,22 +58,21 @@ class TagStreamHold:
         self.sleep = ""
 
 
+def get_tag_hold_from_conn(conn: ConnectionHandler) -> TagStreamHold:
+    hold = getattr(conn, "_tag_stream_hold", None)
+    if isinstance(hold, TagStreamHold):
+        return hold
+    hold = TagStreamHold()
+    conn._tag_stream_hold = hold
+    return hold
+
+
 def load_tag_hold_from_conn(conn: ConnectionHandler) -> TagStreamHold:
-    return TagStreamHold(
-        mv=getattr(conn, "_move_tag_stream_hold", "") or "",
-        wx=getattr(conn, "_wx_tag_stream_hold", "") or "",
-        char=getattr(conn, "_char_tag_stream_hold", "") or "",
-        mem=getattr(conn, "_mem_tag_stream_hold", "") or "",
-        sleep=getattr(conn, "_sleep_tag_stream_hold", "") or "",
-    )
+    return get_tag_hold_from_conn(conn)
 
 
 def save_tag_hold_to_conn(conn: ConnectionHandler, hold: TagStreamHold) -> None:
-    conn._move_tag_stream_hold = hold.mv
-    conn._wx_tag_stream_hold = hold.wx
-    conn._char_tag_stream_hold = hold.char
-    conn._mem_tag_stream_hold = hold.mem
-    conn._sleep_tag_stream_hold = hold.sleep
+    conn._tag_stream_hold = hold
 
 
 def load_tag_hold_from_tc(tc: dict[str, Any]) -> TagStreamHold:
@@ -74,12 +97,8 @@ def dispatch_control_tags_from_text(
     apply_mem: bool = True,
 ) -> None:
     """Scan assistant text for control tags and queue device/server actions."""
-    if not text:
+    if not text or not may_contain_control_tags(text):
         return
-    from core.utils.memory_tag_codec import apply_mem_tags_from_assistant_text
-    from core.utils.character_switch_codec import apply_char_switch_from_assistant_text
-    from core.utils.sleep_tag_codec import apply_sleep_tag_from_assistant_text
-
     if apply_mem:
         apply_mem_tags_from_assistant_text(conn, text, label=label)
     apply_char_switch_from_assistant_text(conn, text, label=label)
@@ -106,22 +125,24 @@ def prepare_final_assistant_text_for_tts(
     sentence_id: str | None = None,
     label: str = "prepare_llm_text_for_tts",
     trim_edges: bool = False,
+    dispatch: bool = True,
 ) -> str:
     """Non-streaming path: dispatch tags then return spoken text."""
-    from core.utils.robot_move_codec import split_robot_move_tags
-
     if not text:
         return ""
-    dispatch_control_tags_from_text(
-        conn,
-        text,
-        label=label,
-        sentence_id=sentence_id,
-        defer_post_tts=True,
-        apply_mem=True,
-    )
-    cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
-    return strip_control_tags_for_tts(cleaned, trim_edges=trim_edges)
+    if dispatch:
+        dispatch_control_tags_from_text(
+            conn,
+            text,
+            label=label,
+            sentence_id=sentence_id,
+            defer_post_tts=True,
+            apply_mem=True,
+        )
+    if may_contain_control_tags(text):
+        cleaned, _ = split_robot_move_tags(text, trim_edges=trim_edges)
+        return strip_control_tags_for_tts(cleaned, trim_edges=trim_edges)
+    return text.strip() if trim_edges else text
 
 
 def process_assistant_stream_chunk(
@@ -138,22 +159,13 @@ def process_assistant_stream_chunk(
     apply_mem: bool | None = None,
 ) -> tuple[str | None, TagStreamHold, list]:
     """Streaming path: merge holds, dispatch tags, return TTS-safe fragment."""
-    from core.utils.character_switch_codec import hold_incomplete_char_suffix
-    from core.utils.memory_tag_codec import hold_incomplete_mem_suffix
-    from core.utils.robot_move_codec import (
-        finalize_stream_text_for_tts,
-        prepare_stream_chunk_for_tts,
-    )
-    from core.utils.sleep_tag_codec import hold_incomplete_sleep_suffix
-    from core.utils.weather_tag_codec import hold_incomplete_wx_suffix
-
     if apply_mem is None:
         apply_mem = flush
 
     if flush:
         new_text = hold.merged_prefix() + (new_text or "")
         hold.clear()
-    elif hold.char or hold.mem or hold.sleep or hold.wx:
+    elif hold.has_suffix_hold():
         suffix = hold.char + hold.mem + hold.sleep + hold.wx
         hold.char = ""
         hold.mem = ""
@@ -163,6 +175,17 @@ def process_assistant_stream_chunk(
 
     if not new_text and not flush:
         return None, hold, []
+
+    # Hot path: plain speech chunk with no pending tag suffix.
+    if (
+        not flush
+        and not hold.mv
+        and not may_contain_control_tags(new_text)
+    ):
+        spoken = new_text
+        if not spoken or not spoken.strip():
+            return None, hold, []
+        return spoken, hold, []
 
     raw = new_text or ""
     work, hold.char = hold_incomplete_char_suffix(raw)

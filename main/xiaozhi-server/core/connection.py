@@ -1762,17 +1762,31 @@ class ConnectionHandler:
             trim_edges=trim_edges,
         )
 
+    def _put_tts_stream_text(
+        self, sentence_id: str | None, text: str | None, *, tags_sanitized: bool = True
+    ) -> None:
+        if not text or not str(text).strip():
+            return
+        self.tts.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=sentence_id,
+                sentence_type=SentenceType.MIDDLE,
+                content_type=ContentType.TEXT,
+                content_detail=text,
+                tags_sanitized=tags_sanitized,
+            )
+        )
+
     def _enqueue_tts_stream_part(
         self, sentence_id: str | None, text: str, *, flush_hold: bool = False
     ) -> None:
         """Stream-safe TTS enqueue: holds incomplete trailing control tags."""
         from core.utils.assistant_reply_tags import (
-            load_tag_hold_from_conn,
+            get_tag_hold_from_conn,
             process_assistant_stream_chunk,
-            save_tag_hold_to_conn,
         )
 
-        hold = load_tag_hold_from_conn(self)
+        hold = get_tag_hold_from_conn(self)
         spoken, hold, _ = process_assistant_stream_chunk(
             self,
             text or "",
@@ -1784,17 +1798,7 @@ class ConnectionHandler:
             max_mv_sec=self._robot_move_max_duration(),
             allow_mv_inference=self._robot_move_allow_inference(),
         )
-        save_tag_hold_to_conn(self, hold)
-        if not spoken:
-            return
-        self.tts.tts_text_queue.put(
-            TTSMessageDTO(
-                sentence_id=sentence_id,
-                sentence_type=SentenceType.MIDDLE,
-                content_type=ContentType.TEXT,
-                content_detail=spoken,
-            )
-        )
+        self._put_tts_stream_text(sentence_id, spoken)
 
     def _flush_direct_answer_move_hold(
         self, tc: dict, sentence_id: str | None, da_response: str
@@ -1827,16 +1831,7 @@ class ConnectionHandler:
             apply_mem=True,
         )
         save_tag_hold_to_tc(tc, hold)
-        if not spoken:
-            return
-        self.tts.tts_text_queue.put(
-            TTSMessageDTO(
-                sentence_id=sentence_id,
-                sentence_type=SentenceType.MIDDLE,
-                content_type=ContentType.TEXT,
-                content_detail=spoken,
-            )
-        )
+        self._put_tts_stream_text(sentence_id, spoken)
 
     def _inject_tool_call_fewshot(self):
         """注入工具调用 few-shot 示例到对话历史。
@@ -2391,11 +2386,9 @@ class ConnectionHandler:
             self.sentence_id = current_sentence_id  # 更新共享属性
             self._executed_robot_moves = set()
             self._executed_weather_lookups = set()
-            self._move_tag_stream_hold = ""
-            self._char_tag_stream_hold = ""
-            self._mem_tag_stream_hold = ""
-            self._sleep_tag_stream_hold = ""
-            self._wx_tag_stream_hold = ""
+            from core.utils.assistant_reply_tags import TagStreamHold
+
+            self._tag_stream_hold = TagStreamHold()
             self._robot_move_sequence_queue = []
             self._robot_move_in_flight = False
             self._robot_move_pump_scheduled = False
@@ -2547,15 +2540,9 @@ class ConnectionHandler:
                                     )
                                     tc["_da_parsed_len"] = len(da_text)
                                     save_tag_hold_to_tc(tc, hold)
-                                    if spoken:
-                                        self.tts.tts_text_queue.put(
-                                            TTSMessageDTO(
-                                                sentence_id=current_sentence_id,
-                                                sentence_type=SentenceType.MIDDLE,
-                                                content_type=ContentType.TEXT,
-                                                content_detail=spoken,
-                                            )
-                                        )
+                                    self._put_tts_stream_text(
+                                        current_sentence_id, spoken
+                                    )
                 else:
                     content = response
 
@@ -2644,16 +2631,13 @@ class ConnectionHandler:
                                 tc, current_sentence_id, da_response
                             )
                             da_clean = self._clean_response_garbage(da_response)
-                            self._dispatch_mv_from_assistant_text(
-                                current_sentence_id,
-                                da_clean,
-                                label="da_full",
-                                defer_post_tts=True,
+                            from core.utils.tts_tag_sanitize import (
+                                strip_control_tags_for_tts,
                             )
-                            # 写入对话历史（不含 mv: 控制码）
-                            da_response = da_clean
-                            da_response = self._prepare_llm_text_for_tts(
-                                current_sentence_id, da_response, trim_edges=True
+
+                            # History only — tags already dispatched during da_stream/da_tail.
+                            da_response = strip_control_tags_for_tts(
+                                da_clean, trim_edges=True
                             )
                             self.tts.store_tts_text(current_sentence_id, da_response)
                             self.dialogue.put(

@@ -22,12 +22,24 @@ _TRAILING_AT_PARAM_RE = re.compile(
     r"(?:\s+[A-Za-zÀ-ỹ][A-Za-zÀ-ỹ0-9]{0,24})?@[a-z0-9+-]+\s*$",
     re.IGNORECASE,
 )
+# Fast reject before running 7 strip passes / dispatch scans on plain LLM tokens.
+_CONTROL_TAG_MARKER_RE = re.compile(
+    r"(?:\b(?:vol|wx|tof|mv|mem|char)\s*:|\bsleep\b|@)",
+    re.IGNORECASE,
+)
+
+
+def may_contain_control_tags(text: str) -> bool:
+    """Cheap check — most stream chunks are plain speech with no device tags."""
+    return bool(text and _CONTROL_TAG_MARKER_RE.search(text))
 
 
 def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:
     """Remove operational tags from assistant text before speech synthesis."""
     if not text:
         return ""
+    if not may_contain_control_tags(text):
+        return text.strip() if trim_edges else text
     from core.utils.character_switch_codec import strip_char_tags
     from core.utils.memory_tag_codec import strip_mem_tags
     from core.utils.robot_move_codec import strip_move_tags

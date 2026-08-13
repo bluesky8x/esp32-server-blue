@@ -138,6 +138,10 @@ class TTSProviderBase(ABC):
         """Remove control tags before speech; dispatch side effects where needed."""
         if not text:
             return ""
+        from core.utils.tts_tag_sanitize import may_contain_control_tags
+
+        if not may_contain_control_tags(text):
+            return self._normalize_tts_text(text)
         from core.utils.memory_tag_codec import apply_mem_tags_from_assistant_text
         from core.utils.character_switch_codec import apply_char_switch_from_assistant_text
         from core.utils.sleep_tag_codec import apply_sleep_tag_from_assistant_text
@@ -159,13 +163,25 @@ class TTSProviderBase(ABC):
             sid = sentence_id or getattr(self, "current_sentence_id", None)
             self.conn._dispatch_robot_move_steps(sid, steps)
         cleaned = strip_control_tags_for_tts(cleaned, trim_edges=False)
+        return self._normalize_tts_text(cleaned)
+
+    def _normalize_tts_text(self, text: str) -> str:
+        if not text:
+            return ""
         if getattr(self.conn, "normalize_vietnamese_tts", True):
-            cleaned = textUtils.normalize_vietnamese_tts_text(cleaned)
-        return cleaned
+            return textUtils.normalize_vietnamese_tts_text(text)
+        return text
+
+    def _prepare_tts_queue_text(self, text: str, *, tags_sanitized: bool = False) -> str:
+        """Prepare text once when entering the TTS queue (not again at segment/TTS time)."""
+        if not text:
+            return ""
+        if tags_sanitized:
+            return self._normalize_tts_text(text)
+        return self._sanitize_tts_text(text)
 
     def to_tts_stream(self, text, opus_handler: Callable[[bytes], None] = None) -> None:
-        # 保留原始文本用于显示/上报
-        text = self._sanitize_tts_text(text, getattr(self, "current_sentence_id", None))
+        # 保留原始文本用于显示/上报（queue/buff 已在入队时 sanitize）
         if not text or not text.strip():
             return
         original_text = text
@@ -455,8 +471,9 @@ class TTSProviderBase(ABC):
                     self.tts_audio_first_sentence = True
                     self._sentence_audio_started = False
                 elif ContentType.TEXT == message.content_type:
-                    detail = self._sanitize_tts_text(
-                        message.content_detail or "", message.sentence_id
+                    detail = self._prepare_tts_queue_text(
+                        message.content_detail or "",
+                        tags_sanitized=getattr(message, "tags_sanitized", False),
                     )
                     if detail:
                         if self.tts_text_buff:
@@ -590,20 +607,15 @@ class TTSProviderBase(ABC):
 
         if last_punct_pos != -1:
             raw_slice = current_text[: last_punct_pos + 1]
-            spoken = self._sanitize_tts_text(
-                raw_slice, getattr(self, "current_sentence_id", None)
-            )
-            segment_text = textUtils.get_string_no_punctuation_or_emoji(spoken)
+            segment_text = textUtils.get_string_no_punctuation_or_emoji(raw_slice)
             self.processed_chars += len(raw_slice)
             if self.is_first_sentence:
                 self.is_first_sentence = False
             return segment_text or None
         if self.tts_stop_request and current_text:
-            segment_text = self._sanitize_tts_text(
-                current_text, getattr(self, "current_sentence_id", None)
-            )
+            segment_text = textUtils.get_string_no_punctuation_or_emoji(current_text)
             self.is_first_sentence = True
-            return textUtils.get_string_no_punctuation_or_emoji(segment_text) or None
+            return segment_text or None
         return None
 
     def _process_audio_file_stream(
@@ -649,9 +661,6 @@ class TTSProviderBase(ABC):
 
         max_chars, max_words = self._tts_chunk_limits()
         raw_remaining = remaining_text
-        remaining_text = self._sanitize_tts_text(
-            remaining_text, getattr(self, "current_sentence_id", None)
-        )
         chunks = split_text_for_tts(
             remaining_text, max_chars=max_chars, max_words=max_words
         )
