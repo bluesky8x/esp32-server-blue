@@ -10,11 +10,13 @@ Protocol: ``mv:<code>[:<seconds>]`` appended **at end of reply**, e.g.
 | f    | forward       | self.motor.forward        |
 | b    | backward      | self.motor.backward       |
 | c    | circle (arc)  | self.motor.circle         |
-| d    | dance         | self.motor.dance          |
+| d    | dance 1       | self.motor.dance (track=1) |
+| d2   | dance 2       | self.motor.dance (track=2) |
+| d3   | dance 3       | self.motor.dance (track=3) |
 | s    | stop          | self.motor.stop           |
 
 Duration (seconds): optional suffix ``:N`` after code — default 5, max 30.
-``mv:d`` runs a fixed ~8 s routine; optional ``:N`` is ignored (server cooldown only).
+``mv:d`` / ``mv:d2`` / ``mv:d3`` run fixed routines (~24 s / ~100 s / ~26 s); optional ``:N`` is ignored (server cooldown only).
 Server prefers ``self.motor.move`` with ``duration_ms`` when available.
 """
 
@@ -26,19 +28,21 @@ MAX_ROBOT_MOVE_SEQUENCE = 5
 DEFAULT_ROBOT_MOVE_DURATION_SEC = 5
 MAX_ROBOT_MOVE_DURATION_SEC = 30
 DANCE_MOVE_DURATION_SEC = 24
+DANCE2_MOVE_DURATION_SEC = 100
+DANCE3_MOVE_DURATION_SEC = 26
 
 import re
 
-# mv:t  mv:t:10  Kita mv:f:5
+# mv:t  mv:t:10  mv:d3  Kita mv:f:5
 MOVE_TAG_RE = re.compile(
-    r"(?:\bKita\s+)?mv\s*:\s*([tprfbsdc])(?:\s*:\s*(\d+))?\b", re.IGNORECASE
+    r"(?:\bKita\s+)?mv\s*:\s*(d3|d2|[tprfbsdc])(?:\s*:\s*(\d+))?\b", re.IGNORECASE
 )
 MOVE_TAG_STRIP_RE = re.compile(
-    r"(?:\bKita\s+)?mv\s*:\s*[tprfbsdc](?:\s*:\s*\d+)?\b", re.IGNORECASE
+    r"(?:\bKita\s+)?mv\s*:\s*(?:d3|d2|[tprfbsdc])(?:\s*:\s*\d+)?\b", re.IGNORECASE
 )
 
 _INCOMPLETE_MOVE_SUFFIX_RE = re.compile(
-    r"(?:\s+(?:Kita\s+)?(?:m(?:v(?:\s*:\s*[tprfbsd]?(?:\s*:\s*\d{0,2})?)?)?)?)$",
+    r"(?:\s+(?:Kita\s+)?(?:m(?:v(?:\s*:\s*(?:d3|d2|[tprfbsd]?(?:\s*:\s*\d{0,2})?)?)?)?)?)$",
     re.IGNORECASE,
 )
 
@@ -49,6 +53,8 @@ MOVE_CODE_TO_MCP: dict[str, tuple[str, ...]] = {
     "b": ("self.motor.backward", "self.chassis.go_back"),
     "c": ("self.motor.circle",),
     "d": ("self.motor.dance", "self.chassis.dance"),
+    "d2": ("self.motor.dance", "self.chassis.dance"),
+    "d3": ("self.motor.dance", "self.chassis.dance"),
     "s": ("self.motor.stop",),
 }
 
@@ -122,6 +128,27 @@ _INFER_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         "f",
     ),
     (re.compile(r"dừng(?:\s+lại)?", re.IGNORECASE), "s"),
+    (
+        re.compile(
+            r"dance\s*3|nhảy\s*3|múa\s*3|mu\s*a\s*3|drill|pirate|cướp\s*biển",
+            re.IGNORECASE,
+        ),
+        "d3",
+    ),
+    (
+        re.compile(
+            r"dance\s*2|nhảy\s*2|múa\s*2|mu\s*a\s*2|hip[\s-]?hop",
+            re.IGNORECASE,
+        ),
+        "d2",
+    ),
+    (
+        re.compile(
+            r"dance\s*1|nhảy\s*1|múa\s*1|mu\s*a\s*1",
+            re.IGNORECASE,
+        ),
+        "d",
+    ),
     (
         re.compile(
             r"nhảy|múa|mu\s*a|dance|lắc\s+lắc|wiggle",
@@ -200,6 +227,10 @@ def extract_move_steps(
             duration = 0
         elif code == "d":
             duration = DANCE_MOVE_DURATION_SEC
+        elif code == "d2":
+            duration = DANCE2_MOVE_DURATION_SEC
+        elif code == "d3":
+            duration = DANCE3_MOVE_DURATION_SEC
         steps.append(RobotMoveStep(code=code, duration_sec=duration))
     return steps
 
@@ -398,7 +429,13 @@ def build_mcp_call(
         return resolve_mcp_tool("s", available), {}
 
     if code == "d":
-        return resolve_mcp_tool("d", available), {}
+        return resolve_mcp_tool("d", available), {"track": 1}
+
+    if code == "d2":
+        return resolve_mcp_tool("d2", available), {"track": 2}
+
+    if code == "d3":
+        return resolve_mcp_tool("d3", available), {"track": 3}
 
     duration_ms = (
         step.duration_sec * 1000
@@ -428,7 +465,7 @@ def build_mcp_call(
 
 
 def format_move_step(step: RobotMoveStep) -> str:
-    if step.code in ("s", "d") or step.duration_sec <= 0:
+    if step.code in ("s", "d", "d2", "d3") or step.duration_sec <= 0:
         return step.code
     return f"{step.code}:{step.duration_sec}"
 

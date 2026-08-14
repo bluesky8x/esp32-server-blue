@@ -28,6 +28,8 @@ def robot_move_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") ->
                 '✅ Good: *"Turning left for 10 seconds mv:t:10"*',
                 '✅ Good: *"Spinning in a circle for 10 seconds mv:c:10"*',
                 '✅ Good: *"Okie, watch me dance mv:d"*',
+                '✅ Good: *"Hip-hop dance time mv:d2"*',
+                '✅ Good: *"Pirate drill dance mv:d3"*',
                 '✅ Good: *"Going forward, turning right, then stopping mv:f:5 mv:p:5 mv:s"*',
                 '✅ Good: *"Turning right then left mv:p mv:t"*',
                 '✅ Good: *"Okay, turning right now mv:p"*',
@@ -43,7 +45,9 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — go forward, move ahead |
 | mv:b | backward — go back, reverse |
 | mv:c | circle — spin / drive in a circle (NOT forward) |
-| mv:d | dance — wiggle and spin (~8 s fixed routine) |
+| mv:d | dance 1 — slap-house ~23 s |
+| mv:d2 | dance 2 — hip-hop ~99 s |
+| mv:d3 | dance 3 — orchestral drill ~25 s |
 | mv:s | stop — stop moving |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
@@ -55,7 +59,9 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 | Turn left 10 s | `mv:t:10` |
 | Forward 30 s | `mv:f:30` |
 | Circle / spin 10 s | `mv:c:10` |
-| Dance | `mv:d` |
+| Dance 1 | `mv:d` |
+| Dance 2 / hip-hop | `mv:d2` |
+| Dance 3 / drill / pirate | `mv:d3` |
 | Multi-step with times | `mv:f:10 mv:p:5 mv:s` |
 
 **Format:** `<natural sentence> mv:<code>[:<seconds>]` — tags always at the **very end**.
@@ -86,6 +92,8 @@ When you **confirm** you will move, you **must** append the matching `mv:*` — 
             '✅ Good: *"Mình quay trái 10 giây nha mv:t:10"*',
             '✅ Good: *"Dạ đi vòng vòng 10 giây nha mv:c:10"*',
             '✅ Good: *"Okie, mình nhảy nha mv:d"*',
+            '✅ Good: *"Mình nhảy hip-hop nha mv:d2"*',
+            '✅ Good: *"Mình nhảy drill cướp biển nha mv:d3"*',
             '✅ Good: *"Mình đi tới, quẹo phải rồi dừng nha mv:f:5 mv:p:5 mv:s"*',
             '✅ Good: *"Mình quay phải rồi quay trái nha mv:p mv:t"*',
             '✅ Good: *"Rồi, mình quay phải đây mv:p"*',
@@ -101,7 +109,9 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — đi tới, tiến, đi thẳng, đi lên |
 | mv:b | backward — lùi, đi lùi |
 | mv:c | circle — đi vòng vòng, quay vòng (NOT forward) |
-| mv:d | dance — nhảy, múa, lắc lắc (~8 giây) |
+| mv:d | dance 1 — nhảy slap-house (~23 giây) |
+| mv:d2 | dance 2 — nhảy hip-hop (~99 giây) |
+| mv:d3 | dance 3 — nhảy drill / cướp biển (~25 giây) |
 | mv:s | stop — dừng, dừng lại |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
@@ -113,7 +123,9 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 | Turn left 10 s | `mv:t:10` |
 | Forward 30 s | `mv:f:30` |
 | Circle / đi vòng vòng 10 s | `mv:c:10` |
-| Nhảy / múa | `mv:d` |
+| Nhảy dance 1 | `mv:d` |
+| Nhảy dance 2 / hip-hop | `mv:d2` |
+| Nhảy dance 3 / drill | `mv:d3` |
 | Multi-step with times | `mv:f:10 mv:p:5 mv:s` |
 
 **Format:** `<câu nói tự nhiên> mv:<code>[:<seconds>]` — tags always at the **very end**.
