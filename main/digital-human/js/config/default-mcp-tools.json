@@ -157,6 +157,18 @@
         "mockResponse": { "success": true, "action": "turn_right", "duration_ms": "${duration_ms}" }
     },
     {
+        "name": "self.motor.dance",
+        "description": "Dance routine: wiggle left/right, bob forward/back, spin. Use for: nhảy, múa, dance.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "dance" }
+    },
+    {
+        "name": "self.chassis.dance",
+        "description": "Dance routine (chassis alias).",
+        "inputSchema": { "type": "object", "properties": {} },
+        "mockResponse": { "success": true, "action": "dance" }
+    },
+    {
         "name": "self.chassis.turn_left",
         "description": "Turn left (chassis alias).",
         "inputSchema": { "type": "object", "properties": {} },
