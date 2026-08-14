@@ -14,6 +14,8 @@ from core.utils.audioRateController import AudioRateController
 TAG = __name__
 # Delay before post-TTS motor/ToF MCP so the device can enter listening first.
 POST_TTS_ACTION_DELAY_SEC = 0.6
+# Extra delay before ToF calibrate — user needs time to position robot after TTS instructions.
+POST_TTS_TOF_CAL_DELAY_SEC = 10.0
 # 音频帧时长（毫秒）
 AUDIO_FRAME_DURATION = 60
 # 预缓冲包数量，直接发送以减少延迟

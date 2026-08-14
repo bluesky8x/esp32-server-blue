@@ -263,46 +263,60 @@ def tof_calibrate_tags_prompt(*, example_tone: str = "kira", locale: str = "vi")
     loc = normalize_operational_locale(locale)
     if loc == "en":
         if example_tone == "lili":
-            example = '✅ *"Okie, place the robot on open floor with ~40 cm clear ahead, then I\'ll calibrate tof:cal:400"*'
+            example = (
+                '✅ Step 1: *"Place the robot on open floor, say ok when ready"* — **no tag**'
+                '\n✅ Step 2: *"Calibrating from sensor reading tof:cal"*'
+            )
         else:
-            example = '✅ *"Please place the robot on open floor with ~40 cm clear ahead, hold still — calibrating now tof:cal:400"*'
+            example = (
+                '✅ Step 1: *"Place the robot on open floor and say ok when ready"* — **no tag**'
+                '\n✅ Step 2: *"Hold still — calibrating now tof:cal"*'
+            )
         return f"""## ToF distance sensor calibration (Blue robot body)
-This robot has a **VL53L0X** front distance sensor. Calibration saves a **safe travel distance** to flash.
+Low-mounted **VL53L0X**. **`tof:cal`** tells the robot to calibrate from **its current reading** (no fixed mm from server).
 
-When the user asks to **calibrate** the distance sensor / ToF:
-1. Tell them to place the robot on **open floor** with clear space ahead (default **~40 cm / 400 mm**), hold still.
-2. Append **`tof:cal`** or **`tof:cal:<mm>`** at the **very end** of your reply (stripped before TTS).
-3. After calibrate, forward motion stops if distance becomes **much closer** (obstacle) or **much farther** (cliff) than the saved reference.
+**Two-step flow (required):**
+1. **First reply** — instruct: open floor ahead, hold still. **Do NOT append `tof:cal` yet.**
+2. **When user confirms** (ok / xong / đặt xong) — brief reply + **`tof:cal`** at the very end.
 
-| User asks | Tag |
-|-----------|-----|
-| Calibrate sensor (~40 cm clear ahead) | `tof:cal` or `tof:cal:400` |
-| Calibrate at 35 cm | `tof:cal:350` |
+| When | Tag |
+|------|-----|
+| User confirms ready | `tof:cal` (device auto — median reading) |
+| Rare: fixed target | `tof:cal:<mm>` only if user measured exact distance |
+
+Calibration runs **~10 s after your TTS** so the user can position the robot.
 
 {example}
-❌ Bad: *"I can't calibrate"* / manual steps **without** `tof:cal` — calibration will not run
-❌ Bad: confirming calibration **without** the tag — robot will not calibrate or save"""
+❌ Bad: *instruction + `tof:cal` in the same first reply*
+❌ Bad: confirming calibration **without** the tag"""
 
     if example_tone == "lili":
-        example = '✅ *"Okie, đặt robot trên sàn trống phía trước (~40 cm) rồi mình hiệu chuẩn nha tof:cal:400"*'
+        example = (
+            '✅ Bước 1: *"Đặt robot sàn trống phía trước, xong nói ok nha"* — **chưa tag**'
+            '\n✅ Bước 2: *"Mình hiệu chuẩn theo cảm biến nha tof:cal"*'
+        )
     else:
-        example = '✅ *"Dạ, bạn đặt robot trên bàn sàn trống phía trước (~40 cm), mình hiệu chuẩn nha tof:cal:400"*'
-    return f"""## ToF distance sensor calibration (Blue robot body)
-This robot has a **VL53L0X** front distance sensor. Calibration saves a **safe travel distance** to flash.
+        example = (
+            '✅ Bước 1: *"Dạ, đặt robot trên bàn sàn trống, xong nói ok nha"* — **chưa tag**'
+            '\n✅ Bước 2: *"Dạ, mình hiệu chuẩn nha tof:cal"*'
+        )
+    return f"""## ToF distance sensor calibration (Blue — VL53L0X gắn thấp)
+**`tof:cal`** = gửi lệnh hiệu chuẩn; robot **tự lấy khoảng cách thực tế** (median), server **không** gửi mm cố định.
 
-When the user asks to **calibrate** the distance sensor / ToF / cảm biến khoảng cách:
-1. Tell them to place the robot on **open floor** with clear space ahead (default **~40 cm / 400 mm** to the floor/wall ahead), hold still.
-2. Append **`tof:cal`** or **`tof:cal:<mm>`** at the **very end** of your reply (stripped before TTS).
-3. After calibrate, forward motion stops if distance becomes **much closer** (obstacle) or **much farther** (cliff) than the saved reference.
+**Luồng 2 bước (bắt buộc):**
+1. **Lần đầu** — hướng dẫn đặt robot sàn trống, giữ yên. **Chưa gắn `tof:cal`.**
+2. **User xác nhận** (ok / xong) — trả lời ngắn + **`tof:cal`**.
 
-| User asks | Tag |
-|-----------|-----|
-| Hiệu chuẩn cảm biến (sàn trống ~40 cm) | `tof:cal` or `tof:cal:400` |
-| Calibrate at 35 cm | `tof:cal:350` |
+| Khi nào | Tag |
+|---------|-----|
+| User xác nhận | `tof:cal` (robot tự đọc & lưu) |
+| Hiếm: đích cố định | `tof:cal:<mm>` chỉ khi user đo chính xác |
+
+Hiệu chuẩn chạy **~10 giây sau TTS**.
 
 {example}
-❌ Bad: *"Mình không hiệu chuẩn được"* / instruct manual steps **without** `tof:cal` — calibration will not run
-❌ Bad: confirming calibration **without** the tag — robot will not calibrate or save"""
+❌ Bad: *hướng dẫn + `tof:cal` cùng câu đầu*
+❌ Bad: xác nhận **không có tag**"""
 
 
 def character_switch_prompt_kira(*, locale: str = "vi") -> str:

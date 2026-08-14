@@ -982,13 +982,33 @@ class ConnectionHandler:
         )
         future.add_done_callback(_on_vol_done)
 
+    def _schedule_post_tts_tof_calibrate(self, distance_mm: int, *, label: str = "") -> None:
+        """Defer ToF calibrate until after TTS + user positioning time."""
+        from core.handle.sendAudioHandle import POST_TTS_TOF_CAL_DELAY_SEC
+
+        dedupe_label = "tof:cal:auto" if distance_mm == 0 else f"tof:cal:{distance_mm}"
+
+        def _start() -> None:
+            loop = getattr(self, "loop", None)
+            if not loop:
+                self._dispatch_tof_calibrate(distance_mm, label=label)
+                return
+
+            async def _delayed() -> None:
+                await asyncio.sleep(POST_TTS_TOF_CAL_DELAY_SEC)
+                self._dispatch_tof_calibrate(distance_mm, label=label)
+
+            asyncio.run_coroutine_threadsafe(_delayed(), loop)
+
+        self._schedule_post_tts_action(dedupe_label, _start)
+
     def _dispatch_tof_calibrate(self, distance_mm: int, *, label: str = "") -> None:
         """Send self.tof.calibrate to the device (works with nointent + tof:cal tags)."""
         from core.utils.tof_tag_codec import clamp_calibration_distance
         from core.utils.util import sanitize_tool_name
 
         distance_mm = clamp_calibration_distance(distance_mm)
-        dedupe_key = ("tof_cal", distance_mm)
+        dedupe_key = ("tof_cal", "auto" if distance_mm == 0 else distance_mm)
         if getattr(self, "_executed_tof_calibrate", None) == dedupe_key:
             return
 
@@ -1020,8 +1040,9 @@ class ConnectionHandler:
 
         self._executed_tof_calibrate = dedupe_key
         args_json = json.dumps({"distance_mm": distance_mm}, ensure_ascii=False)
+        mode = "auto" if distance_mm == 0 else str(distance_mm)
         self.logger.bind(tag=TAG).info(
-            f"[tof] dispatch tof:cal:{distance_mm} → {tool_name} args={args_json} "
+            f"[tof] dispatch tof:cal ({mode}) → {tool_name} args={args_json} "
             f"(from={label or 'unknown'})"
         )
 
@@ -1264,12 +1285,12 @@ class ConnectionHandler:
         if defer_post_tts:
             self._schedule_post_tts_action(
                 f"tof:{label or 'assistant'}",
-                lambda d=distance_mm, l=label: self._dispatch_tof_calibrate(
+                lambda d=distance_mm, l=label: self._schedule_post_tts_tof_calibrate(
                     d, label=l or "assistant"
                 ),
             )
             return True
-        self._dispatch_tof_calibrate(distance_mm, label=label or "assistant")
+        self._schedule_post_tts_tof_calibrate(distance_mm, label=label or "assistant")
         return True
 
     def _maybe_dispatch_tof_stt_fallback(self, *, label: str = "", defer_post_tts: bool = True) -> None:
@@ -1281,12 +1302,12 @@ class ConnectionHandler:
         if defer_post_tts:
             self._schedule_post_tts_action(
                 f"tof_stt:{label or 'user_stt_fallback'}",
-                lambda d=distance_mm, l=label: self._dispatch_tof_calibrate(
+                lambda d=distance_mm, l=label: self._schedule_post_tts_tof_calibrate(
                     d, label=l or "user_stt_fallback"
                 ),
             )
             return
-        self._dispatch_tof_calibrate(distance_mm, label=label or "user_stt_fallback")
+        self._schedule_post_tts_tof_calibrate(distance_mm, label=label or "user_stt_fallback")
 
     def _dispatch_vol_from_assistant_text(
         self, text: str, *, label: str = "", defer_post_tts: bool = False

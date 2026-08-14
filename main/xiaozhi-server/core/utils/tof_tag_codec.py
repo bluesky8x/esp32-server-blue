@@ -12,10 +12,17 @@ TOF_CAL_TAG_STRIP_RE = re.compile(
 )
 
 _CALIBRATE_INTENT_RE = re.compile(
-    r"(?:hiệu chuẩn|hieu chuan|calibrat|canh chinh|canh chuẩn|"
+    r"(?:hiệu chuẩn|hieu chuan|hiệu chỉnh|hieu chinh|calibrat|canh chinh|canh chuẩn|"
     r"cân chỉnh|cai dat cam bien|cài đặt cảm biến|"
     r"cảm biến khoảng cách|cam bien khoang cach|"
     r"vl53|tof sensor|distance sensor)",
+    re.IGNORECASE,
+)
+
+_READY_CONFIRM_RE = re.compile(
+    r"(?:\bxong\b|\bok\b|\bready\b|đặt xong|dat xong|"
+    r"hiệu chuẩn đi|hieu chuan di|calibrate now|"
+    r"bắt đầu hiệu chuẩn|bat dau hieu chuan|làm đi|lam di)",
     re.IGNORECASE,
 )
 
@@ -25,17 +32,19 @@ _DISTANCE_IN_TEXT_RE = re.compile(
 _CM_RE = re.compile(r"(\d{1,2})\s*cm\b", re.IGNORECASE)
 
 
-def default_calibration_distance_mm() -> int:
-    # Match firmware TOF_CALIBRATION_DISTANCE_MM (flat floor ~400 mm on Otto bench).
-    return 400
-
-
 def clamp_calibration_distance(value: int) -> int:
+    """0 = auto-calibrate to current sensor median reading on device."""
+    if value <= 0:
+        return 0
     return max(50, min(800, int(value)))
 
 
 def extract_tof_calibrate_from_assistant_text(text: str) -> int | None:
-    """Return target distance mm when assistant appended tof:cal[:N]."""
+    """Return calibration distance mm when assistant appended tof:cal[:N].
+
+    Bare ``tof:cal`` → 0 (device auto-calibrates from median reading).
+    ``tof:cal:350`` → explicit target only when user measured that distance.
+    """
     if not text:
         return None
     match = TOF_CAL_TAG_RE.search(text)
@@ -43,7 +52,7 @@ def extract_tof_calibrate_from_assistant_text(text: str) -> int | None:
         return None
     if match.group(1):
         return clamp_calibration_distance(int(match.group(1)))
-    return default_calibration_distance_mm()
+    return 0
 
 
 def strip_tof_tags(text: str, *, trim_edges: bool = False) -> str:
@@ -57,11 +66,17 @@ def strip_tof_tags(text: str, *, trim_edges: bool = False) -> str:
 
 
 def infer_tof_calibrate_from_user_text(text: str) -> int | None:
-    """Return calibration distance mm when user asks to calibrate ToF."""
+    """Return calibration distance mm when user asks to calibrate ToF.
+
+    First-time calibrate request → None (LLM instructs only; no auto-run).
+    User confirms ready (\"xong\", \"ok\", …) → 0 auto-calibrate.
+    """
     if not text or not str(text).strip():
         return None
     t = str(text).strip()
-    if not _CALIBRATE_INTENT_RE.search(t):
+    wants_cal = bool(_CALIBRATE_INTENT_RE.search(t))
+    ready = bool(_READY_CONFIRM_RE.search(t))
+    if not wants_cal and not ready:
         return None
 
     cm = _CM_RE.search(t)
@@ -76,4 +91,8 @@ def infer_tof_calibrate_from_user_text(text: str) -> int | None:
             val *= 10
         return clamp_calibration_distance(val)
 
-    return default_calibration_distance_mm()
+    if ready:
+        return 0
+
+    # Initial request — wait for user to position robot and confirm.
+    return None
