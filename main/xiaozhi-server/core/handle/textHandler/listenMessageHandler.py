@@ -56,11 +56,13 @@ class ListenTextMessageHandler(TextMessageHandler):
 
             conn._last_listen_start_at = now
 
-            # Touch reset: abort stuck wx/TTS and sync device speaking → listening
+            # Device sends listen/start after intro TTS while wx fetch/speak runs next.
+            # Ignore — aborting here cut off weather follow-up (see wx: deferred post_tts).
             if getattr(conn, "_wx_followup_pending", False):
-                conn._schedule_listening_recovery(
-                    reason="listen start (wx abort)", abort_tts=True
+                conn.logger.bind(tag=TAG).debug(
+                    "listen start ignored — wx follow-up in progress"
                 )
+                return
             elif debounced:
                 conn.clearSpeakStatus()
                 conn.reset_audio_states()

@@ -59,8 +59,8 @@ MOVE_CODE_TO_MCP: dict[str, tuple[str, ...]] = {
 }
 
 MOVE_WHEEL_SPEEDS: dict[str, tuple[int, int]] = {
-    "t": (-70, 70),
-    "p": (70, -70),
+    "t": (70, -70),
+    "p": (-70, 70),
     "f": (100, 100),
     "b": (-100, -100),
     "c": (50, 100),
