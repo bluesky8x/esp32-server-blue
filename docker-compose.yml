@@ -30,6 +30,7 @@ services:
     volumes:
       - ./main/xiaozhi-server/data:/opt/xiaozhi-esp32-server/data
       - ./main/xiaozhi-server/tmp:/opt/xiaozhi-esp32-server/tmp
+      - ./main/xiaozhi-server/music:/opt/xiaozhi-esp32-server/music
       # Uncomment when selected_module.ASR is FunASR:
       # - ./main/xiaozhi-server/models/SenseVoiceSmall/model.pt:/opt/xiaozhi-esp32-server/models/SenseVoiceSmall/model.pt
     environment:

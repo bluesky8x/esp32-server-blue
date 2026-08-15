@@ -2,10 +2,14 @@ import os
 import re
 import time
 import random
-import difflib
 import traceback
 from pathlib import Path
 from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType, ContentType
+from core.utils.music_library import (
+    extract_song_query_from_user_text,
+    refresh_music_index,
+    resolve_music_path,
+)
 from plugins_func.register import register_function, ToolType, ActionResponse, Action
 from typing import TYPE_CHECKING
 
@@ -54,6 +58,9 @@ async def play_music(conn: "ConnectionHandler", song_name: str):
 
 def _extract_song_name(text):
     """从用户输入中提取歌名"""
+    hit = extract_song_query_from_user_text(text)
+    if hit:
+        return hit
     for keyword in ["播放音乐"]:
         if keyword in text:
             parts = text.split(keyword)
@@ -62,32 +69,14 @@ def _extract_song_name(text):
     return None
 
 
-def _find_best_match(potential_song, music_files):
-    """查找最匹配的歌曲"""
-    best_match = None
-    highest_ratio = 0
-
-    for music_file in music_files:
-        song_name = os.path.splitext(music_file)[0]
-        ratio = difflib.SequenceMatcher(None, potential_song, song_name).ratio()
-        if ratio > highest_ratio and ratio > 0.4:
-            highest_ratio = ratio
-            best_match = music_file
-    return best_match
-
-
 def get_music_files(music_dir, music_ext):
     music_dir = Path(music_dir)
     music_files = []
     music_file_names = []
     for file in music_dir.rglob("*"):
-        # 判断是否是文件
         if file.is_file():
-            # 获取文件扩展名
             ext = file.suffix.lower()
-            # 判断扩展名是否在列表中
             if ext in music_ext:
-                # 添加相对路径
                 music_files.append(str(file.relative_to(music_dir)))
                 music_file_names.append(
                     os.path.splitext(str(file.relative_to(music_dir)))[0]
@@ -123,31 +112,28 @@ def initialize_music_handler(conn: "ConnectionHandler"):
 
 
 async def handle_music_command(conn: "ConnectionHandler", text):
-    initialize_music_handler(conn)
+    """Handle play-music intent: search indexed ./music by name, else random."""
     global MUSIC_CACHE
-
-    """处理音乐播放指令"""
-    clean_text = re.sub(r"[^\w\s]", "", text).strip()
+    clean_text = re.sub(r"[^\w\s\u00C0-\u1EF9]", " ", text or "", flags=re.UNICODE)
+    clean_text = re.sub(r"\s+", " ", clean_text).strip()
     conn.logger.bind(tag=TAG).debug(f"检查是否是音乐命令: {clean_text}")
 
-    # 尝试匹配具体歌名
-    if os.path.exists(MUSIC_CACHE["music_dir"]):
-        if time.time() - MUSIC_CACHE["scan_time"] > MUSIC_CACHE["refresh_time"]:
-            # 刷新音乐文件列表
-            MUSIC_CACHE["music_files"], MUSIC_CACHE["music_file_names"] = (
-                get_music_files(MUSIC_CACHE["music_dir"], MUSIC_CACHE["music_ext"])
-            )
-            MUSIC_CACHE["scan_time"] = time.time()
+    query = _extract_song_name(clean_text) or _extract_song_name(text or "")
+    if query and query.lower() in ("random", "ngẫu nhiên", "ngau nhien"):
+        query = None
 
-        potential_song = _extract_song_name(clean_text)
-        if potential_song:
-            best_match = _find_best_match(potential_song, MUSIC_CACHE["music_files"])
-            if best_match:
-                conn.logger.bind(tag=TAG).info(f"找到最匹配的歌曲: {best_match}")
-                await play_local_music(conn, specific_file=best_match)
-                return True
-    # 检查是否是通用播放音乐命令
-    await play_local_music(conn)
+    selected_path, reason = resolve_music_path(conn, query=query)
+    if selected_path is None or not selected_path.is_file():
+        conn.logger.bind(tag=TAG).error(
+            f"音乐目录不可用或无文件 (reason={reason})"
+        )
+        return False
+
+    rel = os.path.relpath(str(selected_path), MUSIC_CACHE["music_dir"])
+    conn.logger.bind(tag=TAG).info(
+        f"播放音乐 ({reason}): {rel} query={query!r}"
+    )
+    await play_local_music(conn, specific_file=rel)
     return True
 
 
@@ -172,6 +158,7 @@ async def play_local_music(conn: "ConnectionHandler", specific_file=None):
     global MUSIC_CACHE
     """播放本地音乐文件"""
     try:
+        refresh_music_index(conn)
         if not os.path.exists(MUSIC_CACHE["music_dir"]):
             conn.logger.bind(tag=TAG).error(
                 f"音乐目录不存在: " + MUSIC_CACHE["music_dir"]

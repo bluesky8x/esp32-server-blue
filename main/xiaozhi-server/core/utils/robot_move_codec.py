@@ -158,6 +158,14 @@ _INFER_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"dừng(?:\s+lại)?", re.IGNORECASE), "s"),
     (
         re.compile(
+            r"stream\s*nh[aạ]c|nh[aạ]c\s*stream|live\s*dance|nh[aạ]c\s*từ\s*server|"
+            r"phát\s*nh[aạ]c\s*nh[aả]y|bật\s*nh[aạ]c\s*nh[aả]y",
+            re.IGNORECASE,
+        ),
+        "ld",
+    ),
+    (
+        re.compile(
             r"dance\s*3|nhảy\s*3|múa\s*3|mu\s*a\s*3|drill|pirate|cướp\s*biển",
             re.IGNORECASE,
         ),

@@ -1599,37 +1599,37 @@ class ConnectionHandler:
             ]
         self._dispatch_robot_move_steps(sentence_id, steps)
 
-    async def _stream_dance_music(self, track: int) -> None:
-        """Stream danceN.* from ./music/ (no TTS intro) before live dance MCP."""
-        from pathlib import Path
-
+    async def _stream_dance_music(self, track: int) -> bool:
+        """Stream music from ./music/ — search by user request, else random."""
         from core.providers.tts.dto.dto import ContentType, SentenceType, TTSMessageDTO
-        from plugins_func.functions.play_music import initialize_music_handler
+        from core.utils.music_library import resolve_music_path
 
-        initialize_music_handler(self)
-        from plugins_func.functions import play_music as play_music_mod
-
-        music_dir = Path(play_music_mod.MUSIC_CACHE.get("music_dir", "./music"))
-        exts = play_music_mod.MUSIC_CACHE.get("music_ext", (".mp3", ".wav", ".p3"))
-        stem = f"dance{track}"
-        selected: Path | None = None
-        if music_dir.is_dir():
-            for ext in exts:
-                if not ext.startswith("."):
-                    ext = f".{ext}"
-                candidate = music_dir / f"{stem}{ext}"
-                if candidate.is_file():
-                    selected = candidate
-                    break
-        if selected is None:
+        song_query = getattr(self, "_last_user_text", None)
+        selected, reason = resolve_music_path(
+            self,
+            query=song_query,
+            track=track,
+            prefer_dance_track=True,
+        )
+        if selected is None or not selected.is_file():
             self.logger.bind(tag=TAG).warning(
-                f"[mv] live dance track {track}: no {stem}.* in {music_dir}"
+                f"[mv] live dance track {track}: no music ({reason}) "
+                f"query={song_query!r}"
             )
-            return
+            return False
 
         sid = getattr(self, "sentence_id", None) or "dance"
         self.logger.bind(tag=TAG).info(
-            f"[mv] streaming live dance music: {selected.name} (track={track})"
+            f"[mv] streaming live dance music ({reason}): {selected.name} "
+            f"track={track} query={song_query!r}"
+        )
+        # FIRST + FILE + LAST — same envelope as play_music so TTS thread encodes Opus.
+        self.tts.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=sid,
+                sentence_type=SentenceType.FIRST,
+                content_type=ContentType.ACTION,
+            )
         )
         self.tts.tts_text_queue.put(
             TTSMessageDTO(
@@ -1639,6 +1639,14 @@ class ConnectionHandler:
                 content_file=str(selected),
             )
         )
+        self.tts.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=sid,
+                sentence_type=SentenceType.LAST,
+                content_type=ContentType.ACTION,
+            )
+        )
+        return True
 
     def _execute_robot_move(
         self, sentence_id: str | None, code: str, duration_sec: int = 0
@@ -1696,102 +1704,117 @@ class ConnectionHandler:
         self._executed_robot_moves.add(dedupe_key)
         self._robot_move_in_flight = True
 
+        def _dispatch_mcp_now() -> None:
+            args_json = json.dumps(tool_args, ensure_ascii=False)
+            self.logger.bind(tag=TAG).info(
+                f"[mv] dispatch mv:{format_move_step(step)} → {tool_name} "
+                f"args={args_json} sentence_id={sentence_id}"
+            )
+
+            def _on_mv_tool_done(
+                fut, mv_step=step, tool=tool_name, mv_duration=duration_sec
+            ):
+                try:
+                    result = fut.result()
+                    action = getattr(result, "action", None)
+                    payload = getattr(result, "result", None) or getattr(
+                        result, "response", None
+                    )
+                    self.logger.bind(tag=TAG).info(
+                        f"[mv] done mv:{format_move_step(mv_step)} → {tool} "
+                        f"action={action} result={payload}"
+                    )
+                except Exception as exc:
+                    self.logger.bind(tag=TAG).error(
+                        f"[mv] failed mv:{format_move_step(mv_step)} → {tool}: {exc}"
+                    )
+
+                self.clearSpeakStatus()
+
+                is_dance = is_dance_code(mv_step.code)
+                move_sec = (
+                    float(mv_duration or 0)
+                    if mv_step.code != "s" and mv_duration and not is_dance
+                    else 0.0
+                )
+                dance_sec = float(mv_duration or 0) if is_dance and mv_duration else 0.0
+                settle_sec = move_sec + 0.15 if move_sec > 0 else 0.0
+
+                def _after_physical_move() -> None:
+                    self._robot_move_in_flight = False
+                    if not is_dance:
+                        self.reset_audio_states()
+                        self.logger.bind(tag=TAG).info(
+                            f"[mv] move settled — mic buffer reset "
+                            f"(queued {move_sec:.1f}s on device)"
+                        )
+                    else:
+                        self.logger.bind(tag=TAG).info(
+                            f"[mv] dance queued — mic stays off on device "
+                            f"(~{dance_sec:.0f}s music)"
+                        )
+                    self._start_robot_move_cooldown(
+                        dance_sec if is_dance and dance_sec > 0 else None
+                    )
+                    if (
+                        self._robot_move_sequence_queue
+                        and not getattr(self, "_robot_move_shutdown", False)
+                        and not (
+                            getattr(self, "stop_event", None)
+                            and self.stop_event.is_set()
+                        )
+                    ):
+                        self.logger.bind(tag=TAG).info(
+                            f"[mv] next in queue ({len(self._robot_move_sequence_queue)} waiting)"
+                        )
+                        self._schedule_robot_move_pump()
+
+                mv_loop = getattr(self, "loop", None)
+                wait_sec = (
+                    dance_sec + 0.5 if is_dance and dance_sec > 0 else settle_sec
+                )
+                if wait_sec > 0 and mv_loop is not None:
+                    label = "dance" if is_dance else "move"
+                    self.logger.bind(tag=TAG).info(
+                        f"[mv] waiting {wait_sec:.1f}s for on-device {label} before next step"
+                    )
+                    mv_loop.call_later(wait_sec, _after_physical_move)
+                else:
+                    _after_physical_move()
+
+            future = asyncio.run_coroutine_threadsafe(
+                self.func_handler.handle_llm_function_call(
+                    self, {"name": tool_name, "arguments": args_json}
+                ),
+                self.loop,
+            )
+            future.add_done_callback(_on_mv_tool_done)
+
         if is_live_dance_code(code):
             track = dance_track_for_code(code)
             loop = getattr(self, "loop", None)
-            if loop is not None:
-                asyncio.run_coroutine_threadsafe(
-                    self._stream_dance_music(track), loop
-                )
-            else:
+            if loop is None:
                 self.logger.bind(tag=TAG).warning(
-                    f"[mv] live dance mv:{code} — event loop missing, no music stream"
+                    f"[mv] live dance mv:{code} — event loop missing"
                 )
+                _dispatch_mcp_now()
+                return
 
-        args_json = json.dumps(tool_args, ensure_ascii=False)
-        self.logger.bind(tag=TAG).info(
-            f"[mv] dispatch mv:{format_move_step(step)} → {tool_name} "
-            f"args={args_json} sentence_id={sentence_id}"
-        )
-
-        def _on_mv_tool_done(
-            fut, mv_step=step, tool=tool_name, mv_duration=duration_sec
-        ):
-            try:
-                result = fut.result()
-                action = getattr(result, "action", None)
-                payload = getattr(result, "result", None) or getattr(
-                    result, "response", None
-                )
-                self.logger.bind(tag=TAG).info(
-                    f"[mv] done mv:{format_move_step(mv_step)} → {tool} "
-                    f"action={action} result={payload}"
-                )
-            except Exception as exc:
-                self.logger.bind(tag=TAG).error(
-                    f"[mv] failed mv:{format_move_step(mv_step)} → {tool}: {exc}"
-                )
-
-            # MCP returns when the move is queued on-device, not when motors stop.
-            # Release the TTS gate immediately; reset ASR/VAD after the physical move.
-            self.clearSpeakStatus()
-
-            is_dance = is_dance_code(mv_step.code)
-            move_sec = (
-                float(mv_duration or 0)
-                if mv_step.code != "s" and mv_duration and not is_dance
-                else 0.0
-            )
-            dance_sec = float(mv_duration or 0) if is_dance and mv_duration else 0.0
-            settle_sec = move_sec + 0.15 if move_sec > 0 else 0.0
-
-            def _after_physical_move() -> None:
-                self._robot_move_in_flight = False
-                if not is_dance:
-                    self.reset_audio_states()
-                    self.logger.bind(tag=TAG).info(
-                        f"[mv] move settled — mic buffer reset "
-                        f"(queued {move_sec:.1f}s on device)"
+            async def _stream_then_dance() -> None:
+                ok = await self._stream_dance_music(track)
+                if not ok:
+                    self.logger.bind(tag=TAG).error(
+                        f"[mv] live dance mv:{code} — no music in ./music "
+                        f"(index empty or directory missing)"
                     )
-                else:
-                    self.logger.bind(tag=TAG).info(
-                        f"[mv] dance queued — mic stays off on device "
-                        f"(~{dance_sec:.0f}s music)"
-                    )
-                self._start_robot_move_cooldown(
-                    dance_sec if is_dance and dance_sec > 0 else None
-                )
-                if (
-                    self._robot_move_sequence_queue
-                    and not getattr(self, "_robot_move_shutdown", False)
-                    and not (
-                        getattr(self, "stop_event", None)
-                        and self.stop_event.is_set()
-                    )
-                ):
-                    self.logger.bind(tag=TAG).info(
-                        f"[mv] next in queue ({len(self._robot_move_sequence_queue)} waiting)"
-                    )
-                    self._schedule_robot_move_pump()
+                # Let Opus frames reach the robot before MCP dance (live=true).
+                await asyncio.sleep(3.0 if ok else 0.5)
+                _dispatch_mcp_now()
 
-            loop = getattr(self, "loop", None)
-            wait_sec = dance_sec + 0.5 if is_dance and dance_sec > 0 else settle_sec
-            if wait_sec > 0 and loop is not None:
-                label = "dance" if is_dance else "move"
-                self.logger.bind(tag=TAG).info(
-                    f"[mv] waiting {wait_sec:.1f}s for on-device {label} before next step"
-                )
-                loop.call_later(wait_sec, _after_physical_move)
-            else:
-                _after_physical_move()
+            asyncio.run_coroutine_threadsafe(_stream_then_dance(), loop)
+            return
 
-        future = asyncio.run_coroutine_threadsafe(
-            self.func_handler.handle_llm_function_call(
-                self, {"name": tool_name, "arguments": args_json}
-            ),
-            self.loop,
-        )
-        future.add_done_callback(_on_mv_tool_done)
+        _dispatch_mcp_now()
 
     def _dispatch_robot_move_codes_now(
         self, sentence_id: str | None, codes: list[str]

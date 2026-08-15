@@ -118,9 +118,9 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:d | dance 1 — nhảy slap-house (~23 giây, nhạc embed trên robot) |
 | mv:d2 | dance 2 — nhảy hip-hop (~99 giây, embed) |
 | mv:d3 | dance 3 — nhảy drill / cướp biển (~25 giây, embed) |
-| mv:ld | live dance 1 — stream nhạc từ server + động tác random |
-| mv:ld2 | live dance 2 — stream hip-hop từ server |
-| mv:ld3 | live dance 3 — stream drill từ server |
+| mv:ld | live dance — stream nhạc `./music/` (tìm tên user nói, không có thì random) |
+| mv:ld2 | live dance 2 — ưu tiên dance2.*, không có thì search/random |
+| mv:ld3 | live dance 3 — ưu tiên dance3.*, không có thì search/random |
 | mv:s | stop — dừng, dừng lại |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
