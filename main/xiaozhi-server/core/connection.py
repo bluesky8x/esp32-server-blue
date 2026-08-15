@@ -1623,13 +1623,16 @@ class ConnectionHandler:
             f"[mv] streaming live dance music ({reason}): {selected.name} "
             f"track={track} query={song_query!r}"
         )
-        from core.utils.music_eq_analyzer import analyze_music_eq, profile_summary
+        from core.utils.music_eq_analyzer import analyze_music_eq, profile_summary, timeline_playback_log
 
         profile = analyze_music_eq(selected)
         self._pending_dance_profile = profile
         self._pending_dance_music_path = str(selected)
         self.logger.bind(tag=TAG).info(
             f"[mv] dance EQ → {profile_summary(profile)}"
+        )
+        self.logger.bind(tag=TAG).info(
+            f"[mv] dance EQ playback map: {timeline_playback_log(profile)}"
         )
         # FIRST + FILE + LAST — same envelope as play_music so TTS thread encodes Opus.
         self.tts.tts_text_queue.put(
@@ -1661,6 +1664,7 @@ class ConnectionHandler:
             analyze_music_eq,
             default_profile_for_track,
             profile_summary,
+            timeline_playback_log,
         )
         from core.utils.robot_move_codec import dance_track_for_code, is_dance_code
 
@@ -1680,6 +1684,10 @@ class ConnectionHandler:
         self.logger.bind(tag=TAG).info(
             f"[mv] dance MCP mood ← EQ {profile_summary(profile)}"
         )
+        if profile.timeline:
+            self.logger.bind(tag=TAG).info(
+                f"[mv] dance MCP timeline: {timeline_playback_log(profile)}"
+            )
         return merged
 
     def _execute_robot_move(

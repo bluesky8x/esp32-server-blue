@@ -93,6 +93,19 @@ def profile_summary(profile: MusicEqProfile) -> str:
     )
 
 
+def timeline_playback_log(profile: MusicEqProfile) -> str:
+    """Human-readable segment schedule for server logs."""
+    if not profile.timeline:
+        return f"static mood={profile.primary}"
+    parts: list[str] = []
+    for i, ch in enumerate(profile.timeline):
+        state = CHAR_TO_STATE.get(ch, "?")
+        t0 = i * profile.segment_ms // 1000
+        t1 = (i + 1) * profile.segment_ms // 1000
+        parts.append(f"{t0:02d}-{t1:02d}s:{state}")
+    return " → ".join(parts)
+
+
 def _empty_profile() -> MusicEqProfile:
     return MusicEqProfile(
         primary="groove",
