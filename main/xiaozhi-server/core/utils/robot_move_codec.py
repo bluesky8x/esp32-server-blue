@@ -10,16 +10,16 @@ Protocol: ``mv:<code>[:<seconds>]`` appended **at end of reply**, e.g.
 | f    | forward       | self.motor.forward        |
 | b    | backward      | self.motor.backward       |
 | c    | circle (arc)  | self.motor.circle         |
-| d    | dance 1       | self.motor.dance (track=1) |
-| d2   | dance 2       | self.motor.dance (track=2) |
-| d3   | dance 3       | self.motor.dance (track=3) |
-| ld   | live dance 1  | stream ./music/dance1.* + self.motor.dance (live) |
-| ld2  | live dance 2  | stream ./music/dance2.* + self.motor.dance (live) |
-| ld3  | live dance 3  | stream ./music/dance3.* + self.motor.dance (live) |
+| d    | dance 1       | stream ./music/ + self.motor.dance |
+| d2   | dance 2       | stream ./music/ + self.motor.dance |
+| d3   | dance 3       | stream ./music/ + self.motor.dance |
+| ld   | dance 1 (alias) | same as mv:d |
+| ld2  | dance 2 (alias) | same as mv:d2 |
+| ld3  | dance 3 (alias) | same as mv:d3 |
 | s    | stop          | self.motor.stop           |
 
 Duration (seconds): optional suffix ``:N`` after code — default 5, max 30.
-``mv:d`` / ``mv:d2`` / ``mv:d3`` use embedded OGG on device; ``mv:ld`` / ``mv:ld2`` / ``mv:ld3`` stream from server ``./music/``.
+``mv:d`` / ``mv:ld`` / ``mv:d2`` / ``mv:ld2`` / ``mv:d3`` / ``mv:ld3`` all stream music from server ``./music/`` (no embedded dance on robot).
 Optional ``:N`` on dance tags is ignored (server cooldown only).
 Server prefers ``self.motor.move`` with ``duration_ms`` when available.
 """
@@ -112,7 +112,7 @@ _VI_NUMBER_WORDS: dict[str, int] = {
     "muoi": 10,
 }
 DANCE_CODES = frozenset({"d", "d2", "d3", "ld", "ld2", "ld3"})
-LIVE_DANCE_CODES = frozenset({"ld", "ld2", "ld3"})
+LIVE_DANCE_CODES = DANCE_CODES
 
 
 def is_dance_code(code: str) -> bool:
@@ -469,8 +469,6 @@ def build_mcp_call(
     if code in DANCE_CODES:
         track = dance_track_for_code(code)
         args: dict = {"track": track}
-        if is_live_dance_code(code):
-            args["live"] = True
         return resolve_mcp_tool("d", available), args
 
     duration_ms = (

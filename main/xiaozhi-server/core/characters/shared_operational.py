@@ -45,12 +45,12 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — go forward, move ahead |
 | mv:b | backward — go back, reverse |
 | mv:c | circle — spin / drive in a circle (NOT forward) |
-| mv:d | dance 1 — slap-house ~23 s (embedded music on robot) |
-| mv:d2 | dance 2 — hip-hop ~99 s (embedded) |
-| mv:d3 | dance 3 — orchestral drill ~25 s (embedded) |
-| mv:ld | live dance 1 — stream music from server + random moves |
-| mv:ld2 | live dance 2 — stream hip-hop from server |
-| mv:ld3 | live dance 3 — stream drill from server |
+| mv:d | dance 1 — stream music from `./music/` + synced moves |
+| mv:d2 | dance 2 — hip-hop style (stream from server) |
+| mv:d3 | dance 3 — drill / pirate style (stream from server) |
+| mv:ld | alias for `mv:d` (same live stream) |
+| mv:ld2 | alias for `mv:d2` |
+| mv:ld3 | alias for `mv:d3` |
 | mv:s | stop — stop moving |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
@@ -62,12 +62,9 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 | Turn left 10 s | `mv:t:10` |
 | Forward 30 s | `mv:f:30` |
 | Circle / spin 10 s | `mv:c:10` |
-| Dance 1 | `mv:d` |
-| Dance 2 / hip-hop | `mv:d2` |
-| Dance 3 / drill / pirate | `mv:d3` |
-| Live dance 1 (stream) | `mv:ld` |
-| Live dance 2 (stream) | `mv:ld2` |
-| Live dance 3 (stream) | `mv:ld3` |
+| Dance 1 (stream) | `mv:d` or `mv:ld` |
+| Dance 2 / hip-hop | `mv:d2` or `mv:ld2` |
+| Dance 3 / drill / pirate | `mv:d3` or `mv:ld3` |
 | Multi-step with times | `mv:f:10 mv:p:5 mv:s` |
 
 **Format:** `<natural sentence> mv:<code>[:<seconds>]` — tags always at the **very end**.
@@ -115,12 +112,12 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — đi tới, tiến, đi thẳng, đi lên |
 | mv:b | backward — lùi, đi lùi |
 | mv:c | circle — đi vòng vòng, quay vòng (NOT forward) |
-| mv:d | dance 1 — nhảy slap-house (~23 giây, nhạc embed trên robot) |
-| mv:d2 | dance 2 — nhảy hip-hop (~99 giây, embed) |
-| mv:d3 | dance 3 — nhảy drill / cướp biển (~25 giây, embed) |
-| mv:ld | live dance — stream nhạc `./music/` (tìm tên user nói, không có thì random) |
-| mv:ld2 | live dance 2 — ưu tiên dance2.*, không có thì search/random |
-| mv:ld3 | live dance 3 — ưu tiên dance3.*, không có thì search/random |
+| mv:d | dance 1 — stream nhạc `./music/` + nhảy theo EQ |
+| mv:d2 | dance 2 — hip-hop (stream từ server) |
+| mv:d3 | dance 3 — drill / cướp biển (stream từ server) |
+| mv:ld | alias của `mv:d` (cùng live stream) |
+| mv:ld2 | alias của `mv:d2` |
+| mv:ld3 | alias của `mv:d3` |
 | mv:s | stop — dừng, dừng lại |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
@@ -132,12 +129,9 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 | Turn left 10 s | `mv:t:10` |
 | Forward 30 s | `mv:f:30` |
 | Circle / đi vòng vòng 10 s | `mv:c:10` |
-| Nhảy dance 1 | `mv:d` |
-| Nhảy dance 2 / hip-hop | `mv:d2` |
-| Nhảy dance 3 / drill | `mv:d3` |
-| Nhảy live dance 1 | `mv:ld` |
-| Nhảy live dance 2 | `mv:ld2` |
-| Nhảy live dance 3 | `mv:ld3` |
+| Nhảy dance 1 | `mv:d` hoặc `mv:ld` |
+| Nhảy dance 2 / hip-hop | `mv:d2` hoặc `mv:ld2` |
+| Nhảy dance 3 / drill | `mv:d3` hoặc `mv:ld3` |
 | Multi-step with times | `mv:f:10 mv:p:5 mv:s` |
 
 **Format:** `<câu nói tự nhiên> mv:<code>[:<seconds>]` — tags always at the **very end**.

@@ -1699,7 +1699,6 @@ class ConnectionHandler:
             format_move_step,
             dance_track_for_code,
             is_dance_code,
-            is_live_dance_code,
         )
 
         step = RobotMoveStep(code=code, duration_sec=duration_sec)
@@ -1833,7 +1832,7 @@ class ConnectionHandler:
             )
             future.add_done_callback(_on_mv_tool_done)
 
-        if is_live_dance_code(code):
+        if is_dance_code(code):
             track = dance_track_for_code(code)
             loop = getattr(self, "loop", None)
             if loop is None:
@@ -1850,7 +1849,7 @@ class ConnectionHandler:
                         f"[mv] live dance mv:{code} — no music in ./music "
                         f"(index empty or directory missing)"
                     )
-                # Let Opus frames reach the robot before MCP dance (live=true).
+                # Let Opus frames reach the robot before MCP dance.
                 await asyncio.sleep(3.0 if ok else 0.5)
                 _dispatch_mcp_now()
 
