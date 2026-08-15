@@ -1623,9 +1623,10 @@ class ConnectionHandler:
             f"[mv] streaming live dance music ({reason}): {selected.name} "
             f"track={track} query={song_query!r}"
         )
-        from core.utils.music_eq_analyzer import analyze_music_eq, profile_summary, timeline_playback_log
+        from core.utils.music_eq_cache import get_or_analyze_music_eq
+        from core.utils.music_eq_analyzer import profile_summary, timeline_playback_log
 
-        profile = analyze_music_eq(selected)
+        profile = get_or_analyze_music_eq(selected)
         self._pending_dance_profile = profile
         self._pending_dance_music_path = str(selected)
         self.logger.bind(tag=TAG).info(
@@ -1660,8 +1661,8 @@ class ConnectionHandler:
         return True
 
     def _merge_dance_eq_args(self, code: str, tool_args: dict) -> dict:
+        from core.utils.music_eq_cache import get_or_analyze_music_eq
         from core.utils.music_eq_analyzer import (
-            analyze_music_eq,
             default_profile_for_track,
             profile_summary,
             timeline_playback_log,
@@ -1675,7 +1676,7 @@ class ConnectionHandler:
         if profile is None:
             music_path = getattr(self, "_pending_dance_music_path", None)
             if music_path:
-                profile = analyze_music_eq(music_path)
+                profile = get_or_analyze_music_eq(music_path)
         if profile is None:
             profile = default_profile_for_track(dance_track_for_code(code))
         merged.update(profile.to_mcp_dict())
