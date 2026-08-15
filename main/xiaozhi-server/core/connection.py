@@ -1623,6 +1623,14 @@ class ConnectionHandler:
             f"[mv] streaming live dance music ({reason}): {selected.name} "
             f"track={track} query={song_query!r}"
         )
+        from core.utils.music_eq_analyzer import analyze_music_eq, profile_summary
+
+        profile = analyze_music_eq(selected)
+        self._pending_dance_profile = profile
+        self._pending_dance_music_path = str(selected)
+        self.logger.bind(tag=TAG).info(
+            f"[mv] dance EQ → {profile_summary(profile)}"
+        )
         # FIRST + FILE + LAST — same envelope as play_music so TTS thread encodes Opus.
         self.tts.tts_text_queue.put(
             TTSMessageDTO(
@@ -1647,6 +1655,32 @@ class ConnectionHandler:
             )
         )
         return True
+
+    def _merge_dance_eq_args(self, code: str, tool_args: dict) -> dict:
+        from core.utils.music_eq_analyzer import (
+            analyze_music_eq,
+            default_profile_for_track,
+            profile_summary,
+        )
+        from core.utils.robot_move_codec import dance_track_for_code, is_dance_code
+
+        if not is_dance_code(code):
+            return tool_args
+        merged = dict(tool_args)
+        profile = getattr(self, "_pending_dance_profile", None)
+        if profile is None:
+            music_path = getattr(self, "_pending_dance_music_path", None)
+            if music_path:
+                profile = analyze_music_eq(music_path)
+        if profile is None:
+            profile = default_profile_for_track(dance_track_for_code(code))
+        merged.update(profile.to_mcp_dict())
+        self._pending_dance_profile = None
+        self._pending_dance_music_path = None
+        self.logger.bind(tag=TAG).info(
+            f"[mv] dance MCP mood ← EQ {profile_summary(profile)}"
+        )
+        return merged
 
     def _execute_robot_move(
         self, sentence_id: str | None, code: str, duration_sec: int = 0
@@ -1705,7 +1739,8 @@ class ConnectionHandler:
         self._robot_move_in_flight = True
 
         def _dispatch_mcp_now() -> None:
-            args_json = json.dumps(tool_args, ensure_ascii=False)
+            dispatch_args = self._merge_dance_eq_args(code, tool_args)
+            args_json = json.dumps(dispatch_args, ensure_ascii=False)
             self.logger.bind(tag=TAG).info(
                 f"[mv] dispatch mv:{format_move_step(step)} → {tool_name} "
                 f"args={args_json} sentence_id={sentence_id}"
