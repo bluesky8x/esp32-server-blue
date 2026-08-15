@@ -13,10 +13,14 @@ Protocol: ``mv:<code>[:<seconds>]`` appended **at end of reply**, e.g.
 | d    | dance 1       | self.motor.dance (track=1) |
 | d2   | dance 2       | self.motor.dance (track=2) |
 | d3   | dance 3       | self.motor.dance (track=3) |
+| ld   | live dance 1  | stream ./music/dance1.* + self.motor.dance (live) |
+| ld2  | live dance 2  | stream ./music/dance2.* + self.motor.dance (live) |
+| ld3  | live dance 3  | stream ./music/dance3.* + self.motor.dance (live) |
 | s    | stop          | self.motor.stop           |
 
 Duration (seconds): optional suffix ``:N`` after code — default 5, max 30.
-``mv:d`` / ``mv:d2`` / ``mv:d3`` run fixed routines (~24 s / ~100 s / ~26 s); optional ``:N`` is ignored (server cooldown only).
+``mv:d`` / ``mv:d2`` / ``mv:d3`` use embedded OGG on device; ``mv:ld`` / ``mv:ld2`` / ``mv:ld3`` stream from server ``./music/``.
+Optional ``:N`` on dance tags is ignored (server cooldown only).
 Server prefers ``self.motor.move`` with ``duration_ms`` when available.
 """
 
@@ -33,16 +37,16 @@ DANCE3_MOVE_DURATION_SEC = 26
 
 import re
 
-# mv:t  mv:t:10  mv:d3  Kita mv:f:5
+# mv:t  mv:t:10  mv:d3  mv:ld2  Kita mv:f:5
 MOVE_TAG_RE = re.compile(
-    r"(?:\bKita\s+)?mv\s*:\s*(d3|d2|[tprfbsdc])(?:\s*:\s*(\d+))?\b", re.IGNORECASE
+    r"(?:\bKita\s+)?mv\s*:\s*(ld3|ld2|ld|d3|d2|[tprfbsdc])(?:\s*:\s*(\d+))?\b", re.IGNORECASE
 )
 MOVE_TAG_STRIP_RE = re.compile(
-    r"(?:\bKita\s+)?mv\s*:\s*(?:d3|d2|[tprfbsdc])(?:\s*:\s*\d+)?\b", re.IGNORECASE
+    r"(?:\bKita\s+)?mv\s*:\s*(?:ld3|ld2|ld|d3|d2|[tprfbsdc])(?:\s*:\s*\d+)?\b", re.IGNORECASE
 )
 
 _INCOMPLETE_MOVE_SUFFIX_RE = re.compile(
-    r"(?:\s+(?:Kita\s+)?(?:m(?:v(?:\s*:\s*(?:d3|d2|[tprfbsd]?(?:\s*:\s*\d{0,2})?)?)?)?)?)$",
+    r"(?:\s+(?:Kita\s+)?(?:m(?:v(?:\s*:\s*(?:ld3|ld2|ld|d3|d2|[tprfbsd]?(?:\s*:\s*\d{0,2})?)?)?)?)?)$",
     re.IGNORECASE,
 )
 
@@ -55,6 +59,9 @@ MOVE_CODE_TO_MCP: dict[str, tuple[str, ...]] = {
     "d": ("self.motor.dance", "self.chassis.dance"),
     "d2": ("self.motor.dance", "self.chassis.dance"),
     "d3": ("self.motor.dance", "self.chassis.dance"),
+    "ld": ("self.motor.dance", "self.chassis.dance"),
+    "ld2": ("self.motor.dance", "self.chassis.dance"),
+    "ld3": ("self.motor.dance", "self.chassis.dance"),
     "s": ("self.motor.stop",),
 }
 
@@ -104,6 +111,27 @@ _VI_NUMBER_WORDS: dict[str, int] = {
     "mười": 10,
     "muoi": 10,
 }
+DANCE_CODES = frozenset({"d", "d2", "d3", "ld", "ld2", "ld3"})
+LIVE_DANCE_CODES = frozenset({"ld", "ld2", "ld3"})
+
+
+def is_dance_code(code: str) -> bool:
+    return (code or "").lower() in DANCE_CODES
+
+
+def is_live_dance_code(code: str) -> bool:
+    return (code or "").lower() in LIVE_DANCE_CODES
+
+
+def dance_track_for_code(code: str) -> int:
+    code = (code or "").lower()
+    if code in ("d3", "ld3"):
+        return 3
+    if code in ("d2", "ld2"):
+        return 2
+    return 1
+
+
 _INFER_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
@@ -225,12 +253,14 @@ def extract_move_steps(
         )
         if code == "s":
             duration = 0
-        elif code == "d":
-            duration = DANCE_MOVE_DURATION_SEC
-        elif code == "d2":
-            duration = DANCE2_MOVE_DURATION_SEC
-        elif code == "d3":
-            duration = DANCE3_MOVE_DURATION_SEC
+        elif code in DANCE_CODES:
+            track = dance_track_for_code(code)
+            if track == 3:
+                duration = DANCE3_MOVE_DURATION_SEC
+            elif track == 2:
+                duration = DANCE2_MOVE_DURATION_SEC
+            else:
+                duration = DANCE_MOVE_DURATION_SEC
         steps.append(RobotMoveStep(code=code, duration_sec=duration))
     return steps
 
@@ -428,14 +458,12 @@ def build_mcp_call(
     if code == "s":
         return resolve_mcp_tool("s", available), {}
 
-    if code == "d":
-        return resolve_mcp_tool("d", available), {"track": 1}
-
-    if code == "d2":
-        return resolve_mcp_tool("d2", available), {"track": 2}
-
-    if code == "d3":
-        return resolve_mcp_tool("d3", available), {"track": 3}
+    if code in DANCE_CODES:
+        track = dance_track_for_code(code)
+        args: dict = {"track": track}
+        if is_live_dance_code(code):
+            args["live"] = True
+        return resolve_mcp_tool("d", available), args
 
     duration_ms = (
         step.duration_sec * 1000
@@ -465,7 +493,7 @@ def build_mcp_call(
 
 
 def format_move_step(step: RobotMoveStep) -> str:
-    if step.code in ("s", "d", "d2", "d3") or step.duration_sec <= 0:
+    if step.code in DANCE_CODES or step.code == "s" or step.duration_sec <= 0:
         return step.code
     return f"{step.code}:{step.duration_sec}"
 

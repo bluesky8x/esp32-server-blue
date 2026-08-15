@@ -45,9 +45,12 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — go forward, move ahead |
 | mv:b | backward — go back, reverse |
 | mv:c | circle — spin / drive in a circle (NOT forward) |
-| mv:d | dance 1 — slap-house ~23 s |
-| mv:d2 | dance 2 — hip-hop ~99 s |
-| mv:d3 | dance 3 — orchestral drill ~25 s |
+| mv:d | dance 1 — slap-house ~23 s (embedded music on robot) |
+| mv:d2 | dance 2 — hip-hop ~99 s (embedded) |
+| mv:d3 | dance 3 — orchestral drill ~25 s (embedded) |
+| mv:ld | live dance 1 — stream music from server + random moves |
+| mv:ld2 | live dance 2 — stream hip-hop from server |
+| mv:ld3 | live dance 3 — stream drill from server |
 | mv:s | stop — stop moving |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
@@ -62,6 +65,9 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 | Dance 1 | `mv:d` |
 | Dance 2 / hip-hop | `mv:d2` |
 | Dance 3 / drill / pirate | `mv:d3` |
+| Live dance 1 (stream) | `mv:ld` |
+| Live dance 2 (stream) | `mv:ld2` |
+| Live dance 3 (stream) | `mv:ld3` |
 | Multi-step with times | `mv:f:10 mv:p:5 mv:s` |
 
 **Format:** `<natural sentence> mv:<code>[:<seconds>]` — tags always at the **very end**.
@@ -109,9 +115,12 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — đi tới, tiến, đi thẳng, đi lên |
 | mv:b | backward — lùi, đi lùi |
 | mv:c | circle — đi vòng vòng, quay vòng (NOT forward) |
-| mv:d | dance 1 — nhảy slap-house (~23 giây) |
-| mv:d2 | dance 2 — nhảy hip-hop (~99 giây) |
-| mv:d3 | dance 3 — nhảy drill / cướp biển (~25 giây) |
+| mv:d | dance 1 — nhảy slap-house (~23 giây, nhạc embed trên robot) |
+| mv:d2 | dance 2 — nhảy hip-hop (~99 giây, embed) |
+| mv:d3 | dance 3 — nhảy drill / cướp biển (~25 giây, embed) |
+| mv:ld | live dance 1 — stream nhạc từ server + động tác random |
+| mv:ld2 | live dance 2 — stream hip-hop từ server |
+| mv:ld3 | live dance 3 — stream drill từ server |
 | mv:s | stop — dừng, dừng lại |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
@@ -126,6 +135,9 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 | Nhảy dance 1 | `mv:d` |
 | Nhảy dance 2 / hip-hop | `mv:d2` |
 | Nhảy dance 3 / drill | `mv:d3` |
+| Nhảy live dance 1 | `mv:ld` |
+| Nhảy live dance 2 | `mv:ld2` |
+| Nhảy live dance 3 | `mv:ld3` |
 | Multi-step with times | `mv:f:10 mv:p:5 mv:s` |
 
 **Format:** `<câu nói tự nhiên> mv:<code>[:<seconds>]` — tags always at the **very end**.
