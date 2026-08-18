@@ -18,18 +18,38 @@ logger = logging.getLogger(__name__)
 
 MatchReason = Literal["search", "online", "dance_track", "random", "no_files", "missing_dir"]
 
-# Strip dance / playback boilerplate when extracting a song title from user STT.
-_SONG_QUERY_NOISE_RE = re.compile(
-    r"\b(?:"
-    r"nhảy|nhay|múa|mua|dance|stream|phát|phat|bật|bat|với|voi|theo|"
-    r"bài\s+hát|bai\s+hat|bài|bai|nhạc|nhac|bản\s+nhạc|ban\s+nhac|music|live|song|track|cho|mình|minh|em|robot|"
-    r"hip[\s-]?hop|drill|slap[\s-]?house|embed|online|server|"
-    r"random|ngẫu\s*nhiên|ngau\s*nhiên"
-    r")\b",
+_EXPLICIT_SONG_MARKERS = re.compile(
+    r"(?:"
+    r"(?:theo|cùng|với)\s+(?:bài\s+hát|bai\s+hat|bài|bai|ca\s+khúc|ca\s+khuc|bản\s+nhạc|ban\s+nhac|nhạc|nhac|song|track)|"
+    r"(?:bài\s+hát|bai\s+hat|bài|bai|ca\s+khúc|ca\s+khuc|bản\s+nhạc|ban\s+nhac)\s+|"
+    r"dance\s+(?:to|along\s+to|with)\s+|"
+    r"(?:play|stream)\s+(?:song|track)\s+"
+    r")\s*(.+)$",
     re.IGNORECASE,
 )
-_BAI_NHAC_PREFIX_RE = re.compile(
-    r"(?:bài\s+hát|bai\s+hat|bài|bai|nhạc|nhac|bản\s+nhạc|ban\s+nhac|song|track)\s+(.+)$",
+
+_GENERIC_SONG_TERMS = frozenset({
+    "", "di", "đi", "coi", "xem", "nha", "nhe", "nhé", "ne", "nè", "ngay", "luon", "luôn",
+    "a", "ạ", "oi", "ơi", "voi", "với", "ho", "hộ", "gium", "giùm", "giup", "giúp",
+    "mot", "một", "vai", "vài", "chut", "chút", "xiu", "xíu",
+    "nua", "nữa", "tiep", "tiếp", "lai", "lại", "them", "thêm", "nua di", "nữa đi",
+    "dance", "nhay", "nhảy", "mua", "múa", "music", "song", "nhac", "nhạc",
+    "hip hop", "hiphop", "drill", "slap house", "house", "edm", "remix", "disco", "pop",
+    "random", "ngau nhien", "ngẫu nhiên", "bat ky", "bất kỳ", "bất kì", "tu do", "tự do",
+    "vui", "vui ve", "vui vẻ", "soi dong", "sôi động", "hay", "dep", "đẹp",
+    "gi do", "gì đó", "nao do", "nào đó", "gi vui vui", "gì vui vui", "mot bai", "một bài",
+    "ban", "bạn", "minh", "mình", "toi", "tôi", "em", "anh", "chi", "chị", "robot", "kira", "lili",
+    "please", "now", "for me", "along", "to", "can you", "could you", "let's", "lets", "just", "for", "me", "a", "the",
+    "again", "more", "one more time", "once more", "keep dancing", "something", "anything"
+})
+
+_TRAILING_NOISE_RE = re.compile(
+    r"[\s,.]+(?:đi|nha|nhé|nè|coi|xem|với|ạ|ơi|nào|giùm|giúp|hộ|kìa|chứ|thôi|nhé\s*em|nha\s*em|đi\s*nha|đi\s*nhé|đi\s*em|đi\s*nào|nữa\s*đi|tiếp\s*đi|lại\s*đi|cho\s*mình\s*xem|cho\s*em\s*xem|cho\s*anh\s*xem|cho\s*tôi\s*xem|please|now|for\s+me)+[\s,.]*$",
+    re.IGNORECASE,
+)
+
+_LEADING_NOISE_RE = re.compile(
+    r"^[\s,.]*(?:can\s+you|could\s+you|please|let\'s|lets|just|bạn\s+có\s+thể|hãy|cùng|to|for|with|theo|cùng|với|bài\s+hát|bai\s+hat|bài|bai|nhạc|nhac|bản\s+nhạc|ban\s+nhac|ca\s+khúc|ca\s+khuc|song|track|một\s+bài|mot\s+bai)\s+",
     re.IGNORECASE,
 )
 
@@ -41,22 +61,37 @@ def normalize_song_key(name: str) -> str:
     return re.sub(r"\s+", " ", stem).strip().lower()
 
 
+def _clean_candidate_song_query(candidate: str | None) -> str | None:
+    if not candidate:
+        return None
+    c = str(candidate).strip()
+    for _ in range(2):
+        c = _TRAILING_NOISE_RE.sub("", c).strip()
+        c = _LEADING_NOISE_RE.sub("", c).strip()
+        c = re.sub(r"^(?:hát|hat)\s+", "", c, flags=re.IGNORECASE).strip()
+    c = re.sub(r"\s+", " ", c).strip()
+    c = re.sub(r"^[^\w\s\u00C0-\u1EF9]+|[^\w\s\u00C0-\u1EF9]+$", "", c).strip()
+    if len(c) < 2 or c.lower() in _GENERIC_SONG_TERMS:
+        return None
+    return c
+
+
 def extract_song_query_from_user_text(text: str | None) -> str | None:
-    """Pull a probable song title from the user's utterance."""
+    """
+    Pull a probable song title from the user's utterance.
+    Requires explicit song markers (e.g. 'bài ...', 'dance to ...') so regular
+    conversational dance requests (e.g. 'Bạn hãy nhảy nữa', 'nhảy đi') do NOT
+    falsely trigger internet song searches.
+    """
     if not text or not str(text).strip():
         return None
     raw = str(text).strip()
-    m = _BAI_NHAC_PREFIX_RE.search(raw)
+    m = _EXPLICIT_SONG_MARKERS.search(raw)
     if m:
-        candidate = m.group(1).strip()
-        candidate = re.sub(r"^(?:hát|hat)\s+", "", candidate, flags=re.IGNORECASE).strip()
-        if len(candidate) >= 2:
-            return candidate
-    cleaned = _SONG_QUERY_NOISE_RE.sub(" ", raw)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    if len(cleaned) >= 2 and normalize_song_key(cleaned) != normalize_song_key(raw):
-        return cleaned
+        return _clean_candidate_song_query(m.group(1))
     return None
+
+
 
 
 def find_best_music_match(query: str, music_files: list[str]) -> str | None:
@@ -155,11 +190,7 @@ def resolve_music_path(
     exts = cache.get("music_ext") or (".mp3", ".wav", ".p3")
 
     search_q = (query or "").strip()
-    if not search_q:
-        search_q = extract_song_query_from_user_text(
-            getattr(conn, "_last_user_text", None)
-        ) or ""
-    else:
+    if search_q:
         extracted = extract_song_query_from_user_text(search_q)
         if extracted:
             search_q = extracted

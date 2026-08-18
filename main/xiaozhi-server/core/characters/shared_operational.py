@@ -22,14 +22,16 @@ def robot_move_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") ->
                 '✅ Good: *"Okie, turning left now mv:t:10"*',
                 '✅ Good: *"Going forward then stopping mv:f:5 mv:s"*',
                 '✅ Good: *"Turning right mv:p"*',
+                '✅ Good: *"Let\'s dance to Shape of You mv:d:song=Shape of You"*',
             )
         else:
             good_examples = (
                 '✅ Good: *"Turning left for 10 seconds mv:t:10"*',
                 '✅ Good: *"Spinning in a circle for 10 seconds mv:c:10"*',
                 '✅ Good: *"Okie, watch me dance mv:d"*',
-                '✅ Good: *"Let\'s dance to Shape of You mv:d"*',
+                '✅ Good: *"Let\'s dance to Shape of You mv:d:song=Shape of You"*',
                 '✅ Good: *"Hip-hop dance time mv:d2"*',
+                '✅ Good: *"Dancing to Despacito in hip-hop style mv:d2:song=Despacito"*',
                 '✅ Good: *"Pirate drill dance mv:d3"*',
                 '✅ Good: *"Going forward, turning right, then stopping mv:f:5 mv:p:5 mv:s"*',
                 '✅ Good: *"Turning right then left mv:p mv:t"*',
@@ -46,10 +48,10 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — go forward, move ahead |
 | mv:b | backward — go back, reverse |
 | mv:c | circle — spin / drive in a circle (NOT forward) |
-| mv:d | dance — stream music (local `./music/` or online search when song requested) + synced moves |
-| mv:d2 | dance 2 — hip-hop style (stream from server) |
-| mv:d3 | dance 3 — drill / pirate style (stream from server) |
-| mv:ld | alias for `mv:d` (same live stream) |
+| mv:d | dance — stream preset music from `./music/` + synced moves |
+| mv:d2 | dance 2 — hip-hop style (stream preset from server) |
+| mv:d3 | dance 3 — drill / pirate style (stream preset from server) |
+| mv:ld | alias for `mv:d` |
 | mv:ld2 | alias for `mv:d2` |
 | mv:ld3 | alias for `mv:d3` |
 | mv:s | stop — stop moving |
@@ -57,18 +59,25 @@ The code is stripped before TTS — write your full natural sentence first, then
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
 Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 
+**Specific Song Parameter:** When the user asks to dance to a **specific song/artist**, you **must append `:song=<Song Title>`** to the dance tag:
+- General dance request (*"dance for me"*, *"dance again"*): `mv:d` or `mv:d2` or `mv:d3`
+- Specific song (*"dance to Shape of You"*): `mv:d:song=Shape of You`
+- Specific song in hip-hop style (*"hip hop dance to Despacito"*): `mv:d2:song=Despacito`
+
 | Example | Tag |
 |---------|-----|
 | Turn left ~5 s (default) | `mv:t` |
 | Turn left 10 s | `mv:t:10` |
 | Forward 30 s | `mv:f:30` |
 | Circle / spin 10 s | `mv:c:10` |
-| Dance 1 (stream) | `mv:d` or `mv:ld` |
+| Dance (preset / random) | `mv:d` or `mv:ld` |
+| Dance with specific song | `mv:d:song=Shape of You` |
 | Dance 2 / hip-hop | `mv:d2` or `mv:ld2` |
+| Dance 2 with specific song | `mv:d2:song=Despacito` |
 | Dance 3 / drill / pirate | `mv:d3` or `mv:ld3` |
 | Multi-step with times | `mv:f:10 mv:p:5 mv:s` |
 
-**Format:** `<natural sentence> mv:<code>[:<seconds>]` — tags always at the **very end**.
+**Format:** `<natural sentence> mv:<code>[:<seconds>][:song=<Song Title>]` — tags always at the **very end**.
 
 **Multi-step (max {n} moves per reply):** **one `mv:*` tag per action**, in order.
 User: *"go forward then turn right"* → `... mv:f:5 mv:p:5` (both tags required).
@@ -90,14 +99,16 @@ When you **confirm** you will move, you **must** append the matching `mv:*` — 
             '✅ Good: *"Okie, mình quay trái nha mv:t:10"*',
             '✅ Good: *"Đi tới rồi dừng nha mv:f:5 mv:s"*',
             '✅ Good: *"Quay phải đi mv:p"*',
+            '✅ Good: *"Okie, mình nhảy theo bài Đồi Hoa Mặt Trời nha mv:d:song=Đồi Hoa Mặt Trời"*',
         )
     else:
         good_examples = (
             '✅ Good: *"Mình quay trái 10 giây nha mv:t:10"*',
             '✅ Good: *"Dạ đi vòng vòng 10 giây nha mv:c:10"*',
             '✅ Good: *"Okie, mình nhảy nha mv:d"*',
-            '✅ Good: *"Okie, mình nhảy theo bài Đồi Hoa Mặt Trời nha mv:d"*',
+            '✅ Good: *"Okie, mình nhảy theo bài Đồi Hoa Mặt Trời nha mv:d:song=Đồi Hoa Mặt Trời"*',
             '✅ Good: *"Mình nhảy hip-hop nha mv:d2"*',
+            '✅ Good: *"Mình nhảy hip-hop bài Cắt đôi nỗi sầu nha mv:d2:song=Cắt đôi nỗi sầu"*',
             '✅ Good: *"Mình nhảy drill cướp biển nha mv:d3"*',
             '✅ Good: *"Mình đi tới, quẹo phải rồi dừng nha mv:f:5 mv:p:5 mv:s"*',
             '✅ Good: *"Mình quay phải rồi quay trái nha mv:p mv:t"*',
@@ -114,7 +125,7 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — đi tới, tiến, đi thẳng, đi lên |
 | mv:b | backward — lùi, đi lùi |
 | mv:c | circle — đi vòng vòng, quay vòng (NOT forward) |
-| mv:d | dance — stream nhạc (thư viện `./music/` hoặc tìm online khi có tên bài hát) + nhảy theo EQ |
+| mv:d | dance — stream nhạc mặc định `./music/` + nhảy theo EQ |
 | mv:d2 | dance 2 — hip-hop (stream từ server) |
 | mv:d3 | dance 3 — drill / cướp biển (stream từ server) |
 | mv:ld | alias của `mv:d` (cùng live stream) |
@@ -125,18 +136,25 @@ The code is stripped before TTS — write your full natural sentence first, then
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
 Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 
+**Tham số tên bài hát (Song Parameter):** Khi người dùng yêu cầu nhảy theo một **bài hát cụ thể**, bạn **phải thêm `:song=<Tên bài hát>`** vào thẻ nhảy:
+- Yêu cầu nhảy chung chung (*"nhảy đi"*, *"nhảy nữa đi"*, *"bạn hãy nhảy nữa"*, *"nhảy coi"*): `mv:d` hoặc `mv:d2` hoặc `mv:d3`
+- Nhảy theo bài hát cụ thể (*"nhảy bài Shape of You"*, *"nhảy theo bài Đồi Hoa Mặt Trời"*): `mv:d:song=Đồi Hoa Mặt Trời`
+- Nhảy hip-hop theo bài hát cụ thể: `mv:d2:song=Cắt đôi nỗi sầu`
+
 | Example | Tag |
 |---------|-----|
 | Turn left ~5 s (default) | `mv:t` |
 | Turn left 10 s | `mv:t:10` |
 | Forward 30 s | `mv:f:30` |
 | Circle / đi vòng vòng 10 s | `mv:c:10` |
-| Nhảy dance 1 | `mv:d` hoặc `mv:ld` |
+| Nhảy dance 1 (nhạc mặc định) | `mv:d` hoặc `mv:ld` |
+| Nhảy theo bài hát cụ thể | `mv:d:song=Đồi Hoa Mặt Trời` |
 | Nhảy dance 2 / hip-hop | `mv:d2` hoặc `mv:ld2` |
+| Nhảy hip-hop theo bài hát | `mv:d2:song=Cắt đôi nỗi sầu` |
 | Nhảy dance 3 / drill | `mv:d3` hoặc `mv:ld3` |
 | Multi-step with times | `mv:f:10 mv:p:5 mv:s` |
 
-**Format:** `<câu nói tự nhiên> mv:<code>[:<seconds>]` — tags always at the **very end**.
+**Format:** `<câu nói tự nhiên> mv:<code>[:<seconds>][:song=<Tên bài hát>]` — tags always at the **very end**.
 
 **Multi-step (max {n} moves per reply):** **one `mv:*` tag per action**, in order.
 User: *"đi tới rồi quẹo phải"* → `... mv:f:5 mv:p:5` (both tags required).

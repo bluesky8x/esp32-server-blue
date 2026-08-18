@@ -37,16 +37,22 @@ DANCE3_MOVE_DURATION_SEC = 26
 
 import re
 
-# mv:t  mv:t:10  mv:d3  mv:ld2  Kita mv:f:5
+# mv:t  mv:t:10  mv:d3  mv:ld2  Kita mv:f:5  mv:d:song=Shape of You  mv:d2:song=Cắt đôi nỗi sầu
 MOVE_TAG_RE = re.compile(
-    r"(?:\bKita\s+)?mv\s*:\s*(ld3|ld2|ld|d3|d2|[tprfbsdc])(?:\s*:\s*(\d+))?\b", re.IGNORECASE
+    r"(?:\bKita\s+)?mv\s*:\s*(ld3|ld2|ld|d3|d2|[tprfbsdc])"
+    r"(?:(?:\s*:\s*(\d+))?(?:\s*:\s*(?:song=)?[\"']?([^\"'\n\r]+?)[\"']?)?|(?:\s*:\s*(?:song=)?[\"']?([^\"'\n\r\d]+.*?)[\"']?))?"
+    r"(?=(?:\s+mv:|\s*$|[.,!?]))",
+    re.IGNORECASE,
 )
 MOVE_TAG_STRIP_RE = re.compile(
-    r"(?:\bKita\s+)?mv\s*:\s*(?:ld3|ld2|ld|d3|d2|[tprfbsdc])(?:\s*:\s*\d+)?\b", re.IGNORECASE
+    r"(?:\bKita\s+)?mv\s*:\s*(?:ld3|ld2|ld|d3|d2|[tprfbsdc])"
+    r"(?:(?:\s*:\s*\d+)?(?:\s*:\s*(?:song=)?[\"']?[^\"'\n\r]+?[\"']?)?|(?:\s*:\s*(?:song=)?[\"']?[^\"'\n\r\d]+.*?[\"']?))?"
+    r"(?=(?:\s+mv:|\s*$|[.,!?]))",
+    re.IGNORECASE,
 )
 
 _INCOMPLETE_MOVE_SUFFIX_RE = re.compile(
-    r"(?:\s+(?:Kita\s+)?(?:m(?:v(?:\s*:\s*(?:ld3|ld2|ld|d3|d2|[tprfbsd]?(?:\s*:\s*\d{0,2})?)?)?)?)?)$",
+    r"(?:\s+(?:Kita\s+)?(?:m(?:v(?:\s*:\s*(?:ld3|ld2|ld|d3|d2|[tprfbsd]?(?:\s*:\s*[^\"'\n\r]{0,30})?)?)?)?)?)$",
     re.IGNORECASE,
 )
 
@@ -207,6 +213,7 @@ _INFER_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
 class RobotMoveStep:
     code: str
     duration_sec: int
+    song: str | None = None
 
 
 def clamp_duration(
@@ -256,8 +263,18 @@ def extract_move_steps(
     steps: list[RobotMoveStep] = []
     for match in MOVE_TAG_RE.finditer(text):
         code = match.group(1).lower()
+        duration_raw = match.group(2)
+        song_raw = match.group(3) or match.group(4)
+        song: str | None = None
+        if song_raw:
+            s = str(song_raw).strip().strip("\"'")
+            if s.lower().startswith("song="):
+                s = s[5:].strip().strip("\"'")
+            if s:
+                song = s
+
         duration = clamp_duration(
-            match.group(2), default_sec=default_sec, max_sec=max_sec
+            duration_raw, default_sec=default_sec, max_sec=max_sec
         )
         if code == "s":
             duration = 0
@@ -269,7 +286,7 @@ def extract_move_steps(
                 duration = DANCE2_MOVE_DURATION_SEC
             else:
                 duration = DANCE_MOVE_DURATION_SEC
-        steps.append(RobotMoveStep(code=code, duration_sec=duration))
+        steps.append(RobotMoveStep(code=code, duration_sec=duration, song=song))
     return steps
 
 
@@ -499,7 +516,11 @@ def build_mcp_call(
 
 
 def format_move_step(step: RobotMoveStep) -> str:
-    if step.code in DANCE_CODES or step.code == "s" or step.duration_sec <= 0:
+    if step.code in DANCE_CODES:
+        if step.song:
+            return f"{step.code}:song={step.song}"
+        return step.code
+    if step.code == "s" or step.duration_sec <= 0:
         return step.code
     return f"{step.code}:{step.duration_sec}"
 

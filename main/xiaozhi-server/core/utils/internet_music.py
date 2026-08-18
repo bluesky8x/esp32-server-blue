@@ -76,7 +76,7 @@ def search_and_download_online_music(
     safe_slug = re.sub(r"[^a-zA-Z0-9\u00C0-\u1EF9_-]+", "_", norm_key)[:40]
     outtmpl = str(target_cache_dir / f"{safe_slug}_[%(id)s]_[{q_hash}].%(ext)s")
 
-    ydl_opts = {
+    base_ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": outtmpl,
         "postprocessors": [
@@ -88,31 +88,36 @@ def search_and_download_online_music(
         ],
         "quiet": True,
         "no_warnings": True,
-        "default_search": "scsearch1",
         "noplaylist": True,
         "socket_timeout": 15,
     }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_query = f"scsearch1:{raw_query}"
-            info = ydl.extract_info(search_query, download=True)
-            if info and "entries" in info and info["entries"]:
-                entry = info["entries"][0]
-                if entry:
-                    title = entry.get("title") or raw_query
-                    for mp3_candidate in target_cache_dir.glob(f"*{q_hash}*.mp3"):
-                        if mp3_candidate.is_file():
-                            logger.info(
-                                "[music] online search success (SoundCloud): %s (%s, %d bytes)",
-                                title,
-                                mp3_candidate.name,
-                                mp3_candidate.stat().st_size,
-                            )
-                            _ONLINE_MUSIC_CACHE[norm_key] = (mp3_candidate, title)
-                            return mp3_candidate, title
-    except Exception as exc:
-        logger.warning("[music] SoundCloud search failed for %r: %s", raw_query, exc)
+    # Try SoundCloud first, then YouTube search
+    for search_prefix, provider_name in (("scsearch1", "SoundCloud"), ("ytsearch1", "YouTube")):
+        try:
+            opts = dict(base_ydl_opts)
+            opts["default_search"] = search_prefix
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                search_query = f"{search_prefix}:{raw_query}"
+                info = ydl.extract_info(search_query, download=True)
+                if info and "entries" in info and info["entries"]:
+                    entry = info["entries"][0]
+                    if entry:
+                        title = entry.get("title") or raw_query
+                        for mp3_candidate in target_cache_dir.glob(f"*{q_hash}*.mp3"):
+                            if mp3_candidate.is_file():
+                                logger.info(
+                                    "[music] online search success (%s): %s (%s, %d bytes)",
+                                    provider_name,
+                                    title,
+                                    mp3_candidate.name,
+                                    mp3_candidate.stat().st_size,
+                                )
+                                _ONLINE_MUSIC_CACHE[norm_key] = (mp3_candidate, title)
+                                return mp3_candidate, title
+        except Exception as exc:
+            logger.warning("[music] %s search failed for %r: %s", provider_name, raw_query, exc)
 
     logger.warning("[music] no online music found for query: %r", raw_query)
     return None, None
+

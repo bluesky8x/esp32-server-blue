@@ -61,11 +61,14 @@ def _extract_song_name(text):
     hit = extract_song_query_from_user_text(text)
     if hit:
         return hit
+    from core.utils.music_library import _clean_candidate_song_query
     for keyword in ["播放音乐", "phát nhạc", "bật nhạc", "play music"]:
         if keyword in text.lower():
             parts = re.split(re.escape(keyword), text, flags=re.IGNORECASE)
             if len(parts) > 1 and parts[1].strip():
-                return parts[1].strip()
+                cleaned = _clean_candidate_song_query(parts[1])
+                if cleaned:
+                    return cleaned
     return None
 
 

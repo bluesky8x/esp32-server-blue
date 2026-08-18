@@ -1387,7 +1387,7 @@ class ConnectionHandler:
         for step in steps:
             if not isinstance(step, RobotMoveStep):
                 step = RobotMoveStep(code=str(step), duration_sec=self._robot_move_default_duration())
-            key = (sentence_id, step.code, step.duration_sec)
+            key = (sentence_id, step.code, step.duration_sec, step.song)
             if key in self._executed_robot_moves:
                 continue
             if key in pending_keys:
@@ -1433,8 +1433,13 @@ class ConnectionHandler:
         if remaining > 0:
             self._schedule_robot_move_pump(delay_s=remaining)
             return
-        sentence_id, code, duration_sec = self._robot_move_sequence_queue.pop(0)
-        self._execute_robot_move(sentence_id, code, duration_sec)
+        item = self._robot_move_sequence_queue.pop(0)
+        if len(item) >= 4:
+            sentence_id, code, duration_sec, song = item[0], item[1], item[2], item[3]
+        else:
+            sentence_id, code, duration_sec = item[0], item[1], item[2]
+            song = None
+        self._execute_robot_move(sentence_id, code, duration_sec, song=song)
 
     def _schedule_robot_move_pump(self, delay_s: float | None = None) -> None:
         if getattr(self, "_robot_move_shutdown", False):
@@ -1515,15 +1520,16 @@ class ConnectionHandler:
                         max_sec=max_sec,
                     )
                 )
-                normalized.append(RobotMoveStep(code=step.code, duration_sec=duration))
+                normalized.append(RobotMoveStep(code=step.code, duration_sec=duration, song=step.song))
             elif isinstance(step, (list, tuple)) and len(step) >= 2:
                 code, dur = step[0], step[1]
+                song = step[2] if len(step) >= 3 else None
                 duration = (
                     0
                     if code == "s"
                     else clamp_duration(dur, default_sec=default_sec, max_sec=max_sec)
                 )
-                normalized.append(RobotMoveStep(code=str(code), duration_sec=duration))
+                normalized.append(RobotMoveStep(code=str(code), duration_sec=duration, song=song))
             else:
                 code = str(step)
                 duration = 0 if code == "s" else default_sec
@@ -1550,7 +1556,7 @@ class ConnectionHandler:
                 self._pending_robot_moves = []
             queued = []
             for step in normalized:
-                key = (sentence_id, step.code, step.duration_sec)
+                key = (sentence_id, step.code, step.duration_sec, step.song)
                 if key in self._executed_robot_moves:
                     continue
                 if key in self._pending_robot_moves:
@@ -1599,29 +1605,28 @@ class ConnectionHandler:
             ]
         self._dispatch_robot_move_steps(sentence_id, steps)
 
-    async def _stream_dance_music(self, track: int) -> bool:
-        """Stream music from ./music/ — search by user request, else random."""
+    async def _stream_dance_music(self, track: int, song_name: str | None = None) -> bool:
+        """Stream music from ./music/ — search by song_name if specified, else preset/random."""
         from core.providers.tts.dto.dto import ContentType, SentenceType, TTSMessageDTO
         from core.utils.music_library import resolve_music_path
 
-        song_query = getattr(self, "_last_user_text", None)
         selected, reason = resolve_music_path(
             self,
-            query=song_query,
+            query=song_name,
             track=track,
             prefer_dance_track=True,
         )
         if selected is None or not selected.is_file():
             self.logger.bind(tag=TAG).warning(
                 f"[mv] live dance track {track}: no music ({reason}) "
-                f"query={song_query!r}"
+                f"song={song_name!r}"
             )
             return False
 
         sid = getattr(self, "sentence_id", None) or "dance"
         self.logger.bind(tag=TAG).info(
             f"[mv] streaming live dance music ({reason}): {selected.name} "
-            f"track={track} query={song_query!r}"
+            f"track={track} song={song_name!r}"
         )
         from core.utils.music_eq_cache import get_or_analyze_music_eq
         from core.utils.music_eq_analyzer import profile_summary, timeline_playback_log
@@ -1692,7 +1697,7 @@ class ConnectionHandler:
         return merged
 
     def _execute_robot_move(
-        self, sentence_id: str | None, code: str, duration_sec: int = 0
+        self, sentence_id: str | None, code: str, duration_sec: int = 0, song: str | None = None
     ) -> None:
         from core.utils.robot_move_codec import (
             RobotMoveStep,
@@ -1702,19 +1707,20 @@ class ConnectionHandler:
             is_dance_code,
         )
 
-        step = RobotMoveStep(code=code, duration_sec=duration_sec)
+        step = RobotMoveStep(code=code, duration_sec=duration_sec, song=song)
+        queue_item = (sentence_id, code, duration_sec, song)
 
         if getattr(self, "_robot_move_in_flight", False):
-            self._robot_move_sequence_queue.insert(0, (sentence_id, code, duration_sec))
+            self._robot_move_sequence_queue.insert(0, queue_item)
             return
         if not getattr(self, "func_handler", None):
             self.logger.bind(tag=TAG).warning("[mv] skip — func_handler missing")
-            self._robot_move_sequence_queue.insert(0, (sentence_id, code, duration_sec))
+            self._robot_move_sequence_queue.insert(0, queue_item)
             return
         if not hasattr(self, "_executed_robot_moves"):
             self._executed_robot_moves = set()
 
-        dedupe_key = (sentence_id, code, duration_sec)
+        dedupe_key = (sentence_id, code, duration_sec, song)
         if dedupe_key in self._executed_robot_moves:
             self.logger.bind(tag=TAG).debug(
                 f"[mv] skip duplicate mv:{format_move_step(step)} sentence_id={sentence_id}"
@@ -1740,7 +1746,7 @@ class ConnectionHandler:
             )
             if dedupe_key not in (self._pending_robot_moves or []):
                 self._pending_robot_moves.append(dedupe_key)
-            self._robot_move_sequence_queue.insert(0, (sentence_id, code, duration_sec))
+            self._robot_move_sequence_queue.insert(0, queue_item)
             return
 
         self._executed_robot_moves.add(dedupe_key)
@@ -1844,7 +1850,7 @@ class ConnectionHandler:
                 return
 
             async def _stream_then_dance() -> None:
-                ok = await self._stream_dance_music(track)
+                ok = await self._stream_dance_music(track, song_name=song)
                 if not ok:
                     self.logger.bind(tag=TAG).error(
                         f"[mv] live dance mv:{code} — no music in ./music "
