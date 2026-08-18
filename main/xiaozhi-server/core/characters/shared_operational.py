@@ -28,7 +28,7 @@ def robot_move_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") ->
                 '✅ Good: *"Turning left for 10 seconds mv:t:10"*',
                 '✅ Good: *"Spinning in a circle for 10 seconds mv:c:10"*',
                 '✅ Good: *"Okie, watch me dance mv:d"*',
-                '✅ Good: *"Let's dance to Shape of You mv:d"*',
+                '✅ Good: *"Let\'s dance to Shape of You mv:d"*',
                 '✅ Good: *"Hip-hop dance time mv:d2"*',
                 '✅ Good: *"Pirate drill dance mv:d3"*',
                 '✅ Good: *"Going forward, turning right, then stopping mv:f:5 mv:p:5 mv:s"*',
