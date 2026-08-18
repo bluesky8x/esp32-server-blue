@@ -1,8 +1,9 @@
-"""Index ./music and resolve files by name (fuzzy) or random fallback."""
+"""Index ./music and resolve files by name (fuzzy), online search, or random fallback."""
 
 from __future__ import annotations
 
 import difflib
+import logging
 import os
 import random
 import re
@@ -13,20 +14,23 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from core.connection import ConnectionHandler
 
-MatchReason = Literal["search", "dance_track", "random", "no_files", "missing_dir"]
+logger = logging.getLogger(__name__)
+
+MatchReason = Literal["search", "online", "dance_track", "random", "no_files", "missing_dir"]
 
 # Strip dance / playback boilerplate when extracting a song title from user STT.
 _SONG_QUERY_NOISE_RE = re.compile(
     r"\b(?:"
-    r"nhảy|nhay|múa|mua|dance|stream|phát|phat|bật|bat|với|voi|"
-    r"bài|bai|nhạc|nhac|music|live|song|track|cho|mình|minh|em|robot|"
+    r"nhảy|nhay|múa|mua|dance|stream|phát|phat|bật|bat|với|voi|theo|"
+    r"bài\s+hát|bai\s+hat|bài|bai|nhạc|nhac|bản\s+nhạc|ban\s+nhac|music|live|song|track|cho|mình|minh|em|robot|"
     r"hip[\s-]?hop|drill|slap[\s-]?house|embed|online|server|"
     r"random|ngẫu\s*nhiên|ngau\s*nhiên"
     r")\b",
     re.IGNORECASE,
 )
 _BAI_NHAC_PREFIX_RE = re.compile(
-    r"(?:bài|bai|nhạc|nhac|song)\s+(.+)$", re.IGNORECASE
+    r"(?:bài\s+hát|bai\s+hat|bài|bai|nhạc|nhac|bản\s+nhạc|ban\s+nhac|song|track)\s+(.+)$",
+    re.IGNORECASE,
 )
 
 
@@ -45,6 +49,7 @@ def extract_song_query_from_user_text(text: str | None) -> str | None:
     m = _BAI_NHAC_PREFIX_RE.search(raw)
     if m:
         candidate = m.group(1).strip()
+        candidate = re.sub(r"^(?:hát|hat)\s+", "", candidate, flags=re.IGNORECASE).strip()
         if len(candidate) >= 2:
             return candidate
     cleaned = _SONG_QUERY_NOISE_RE.sub(" ", raw)
@@ -134,23 +139,19 @@ def resolve_music_path(
     query: str | None = None,
     track: int | None = None,
     prefer_dance_track: bool = False,
+    allow_online_search: bool = True,
 ) -> tuple[Path | None, MatchReason]:
     """
-    Pick a music file under ./music:
+    Pick a music file under ./music or search online:
 
-    1. Fuzzy search by *query* (user song name)
-    2. Optional ``dance{track}.*`` hint when *prefer_dance_track*
-    3. Random from index
+    1. Fuzzy search local files by *query* (user song name)
+    2. Search online (SoundCloud / YouTube) via yt-dlp if *allow_online_search* and *query* provided
+    3. Optional ``dance{track}.*`` hint when *prefer_dance_track*
+    4. Random from index
     """
     cache = refresh_music_index(conn)
     music_dir = Path(cache["music_dir"])
-    if not music_dir.is_dir():
-        return None, "missing_dir"
-
     files: list[str] = list(cache.get("music_files") or [])
-    if not files:
-        return None, "no_files"
-
     exts = cache.get("music_ext") or (".mp3", ".wav", ".p3")
 
     search_q = (query or "").strip()
@@ -163,15 +164,31 @@ def resolve_music_path(
         if extracted:
             search_q = extracted
 
-    if search_q:
+    # 1. Try local music library first
+    if search_q and music_dir.is_dir() and files:
         hit = find_best_music_match(search_q, files)
         if hit:
             return music_dir / hit, "search"
 
-    if prefer_dance_track and track:
+    # 2. Try online search if requested and song query provided
+    if search_q and allow_online_search:
+        from core.utils.internet_music import search_and_download_online_music
+        online_path, online_title = search_and_download_online_music(search_q)
+        if online_path and online_path.is_file():
+            return online_path, "online"
+
+    # 3. Try dance track preset hint
+    if prefer_dance_track and track and music_dir.is_dir():
         dance_path = find_dance_track_file(track, music_dir, exts)
         if dance_path is not None:
             return dance_path, "dance_track"
 
-    rel = random.choice(files)
-    return music_dir / rel, "random"
+    # 4. Fallback to random from local index
+    if music_dir.is_dir() and files:
+        rel = random.choice(files)
+        return music_dir / rel, "random"
+
+    if not music_dir.is_dir():
+        return None, "missing_dir"
+
+    return None, "no_files"

@@ -24,7 +24,7 @@ play_music_function_desc = {
     "type": "function",
     "function": {
         "name": "play_music",
-        "description": "当用户要求播放音乐、歌曲时调用。",
+        "description": "当用户要求播放音乐、歌曲时调用。支持本地歌曲与联网搜索。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -61,10 +61,10 @@ def _extract_song_name(text):
     hit = extract_song_query_from_user_text(text)
     if hit:
         return hit
-    for keyword in ["播放音乐"]:
-        if keyword in text:
-            parts = text.split(keyword)
-            if len(parts) > 1:
+    for keyword in ["播放音乐", "phát nhạc", "bật nhạc", "play music"]:
+        if keyword in text.lower():
+            parts = re.split(re.escape(keyword), text, flags=re.IGNORECASE)
+            if len(parts) > 1 and parts[1].strip():
                 return parts[1].strip()
     return None
 
@@ -91,7 +91,7 @@ def initialize_music_handler(conn: "ConnectionHandler"):
         if "play_music" in plugins_config:
             MUSIC_CACHE["music_config"] = plugins_config["play_music"]
             MUSIC_CACHE["music_dir"] = os.path.abspath(
-                MUSIC_CACHE["music_config"].get("music_dir", "./music")  # 默认路径修改
+                MUSIC_CACHE["music_config"].get("music_dir", "./music")
             )
             MUSIC_CACHE["music_ext"] = MUSIC_CACHE["music_config"].get(
                 "music_ext", (".mp3", ".wav", ".p3")
@@ -112,7 +112,7 @@ def initialize_music_handler(conn: "ConnectionHandler"):
 
 
 async def handle_music_command(conn: "ConnectionHandler", text):
-    """Handle play-music intent: search indexed ./music by name, else random."""
+    """Handle play-music intent: search local ./music by name, or search online, else random."""
     global MUSIC_CACHE
     clean_text = re.sub(r"[^\w\s\u00C0-\u1EF9]", " ", text or "", flags=re.UNICODE)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
@@ -122,56 +122,49 @@ async def handle_music_command(conn: "ConnectionHandler", text):
     if query and query.lower() in ("random", "ngẫu nhiên", "ngau nhien"):
         query = None
 
-    selected_path, reason = resolve_music_path(conn, query=query)
+    selected_path, reason = resolve_music_path(conn, query=query, allow_online_search=True)
     if selected_path is None or not selected_path.is_file():
         conn.logger.bind(tag=TAG).error(
-            f"音乐目录不可用或无文件 (reason={reason})"
+            f"音乐不可用或无文件 (reason={reason})"
         )
         return False
 
-    rel = os.path.relpath(str(selected_path), MUSIC_CACHE["music_dir"])
     conn.logger.bind(tag=TAG).info(
-        f"播放音乐 ({reason}): {rel} query={query!r}"
+        f"播放音乐 ({reason}): {selected_path.name} query={query!r}"
     )
-    await play_local_music(conn, specific_file=rel)
+    await play_local_music(conn, specific_file=str(selected_path))
     return True
 
 
 def _get_random_play_prompt(song_name):
-    """生成随机播放引导语"""
-    # 移除文件扩展名
+    """生成播放引导语"""
     clean_name = os.path.splitext(song_name)[0]
+    clean_name = clean_name.split(" [")[0] if " [" in clean_name else clean_name
     prompts = [
-        f"正在为您播放，《{clean_name}》",
-        f"请欣赏歌曲，《{clean_name}》",
-        f"即将为您播放，《{clean_name}》",
-        f"现在为您带来，《{clean_name}》",
-        f"让我们一起聆听，《{clean_name}》",
-        f"接下来请欣赏，《{clean_name}》",
-        f"此刻为您献上，《{clean_name}》",
+        f"Đang phát bài 《{clean_name}》",
+        f"Mời bạn nghe bài 《{clean_name}》",
+        f"Sau đây là ca khúc 《{clean_name}》",
+        f"Cùng thưởng thức bài hát 《{clean_name}》 nhé",
     ]
-    # 直接使用random.choice，不设置seed
     return random.choice(prompts)
 
 
 async def play_local_music(conn: "ConnectionHandler", specific_file=None):
     global MUSIC_CACHE
-    """播放本地音乐文件"""
+    """播放音乐文件（支持本地和在线下载缓存）"""
     try:
         refresh_music_index(conn)
-        if not os.path.exists(MUSIC_CACHE["music_dir"]):
-            conn.logger.bind(tag=TAG).error(
-                f"音乐目录不存在: " + MUSIC_CACHE["music_dir"]
-            )
-            return
 
-        # 确保路径正确性
         if specific_file:
-            selected_music = specific_file
-            music_path = os.path.join(MUSIC_CACHE["music_dir"], specific_file)
+            if os.path.isabs(specific_file) or os.path.exists(specific_file):
+                music_path = specific_file
+                selected_music = os.path.basename(specific_file)
+            else:
+                selected_music = specific_file
+                music_path = os.path.join(MUSIC_CACHE["music_dir"], specific_file)
         else:
-            if not MUSIC_CACHE["music_files"]:
-                conn.logger.bind(tag=TAG).error("未找到MP3音乐文件")
+            if not MUSIC_CACHE.get("music_files"):
+                conn.logger.bind(tag=TAG).error("未找到音乐文件")
                 return
             selected_music = random.choice(MUSIC_CACHE["music_files"])
             music_path = os.path.join(MUSIC_CACHE["music_dir"], selected_music)
@@ -179,9 +172,9 @@ async def play_local_music(conn: "ConnectionHandler", specific_file=None):
         if not os.path.exists(music_path):
             conn.logger.bind(tag=TAG).error(f"选定的音乐文件不存在: {music_path}")
             return
+
         text = _get_random_play_prompt(selected_music)
         conn.tts.store_tts_text(conn.sentence_id, text)
-        # conn.dialogue.put(Message(role="assistant", content=text))
 
         if conn.intent_type == "intent_llm":
             conn.tts.tts_text_queue.put(

@@ -28,6 +28,7 @@ def robot_move_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") ->
                 '✅ Good: *"Turning left for 10 seconds mv:t:10"*',
                 '✅ Good: *"Spinning in a circle for 10 seconds mv:c:10"*',
                 '✅ Good: *"Okie, watch me dance mv:d"*',
+                '✅ Good: *"Let's dance to Shape of You mv:d"*',
                 '✅ Good: *"Hip-hop dance time mv:d2"*',
                 '✅ Good: *"Pirate drill dance mv:d3"*',
                 '✅ Good: *"Going forward, turning right, then stopping mv:f:5 mv:p:5 mv:s"*',
@@ -45,7 +46,7 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — go forward, move ahead |
 | mv:b | backward — go back, reverse |
 | mv:c | circle — spin / drive in a circle (NOT forward) |
-| mv:d | dance 1 — stream music from `./music/` + synced moves |
+| mv:d | dance — stream music (local `./music/` or online search when song requested) + synced moves |
 | mv:d2 | dance 2 — hip-hop style (stream from server) |
 | mv:d3 | dance 3 — drill / pirate style (stream from server) |
 | mv:ld | alias for `mv:d` (same live stream) |
@@ -95,6 +96,7 @@ When you **confirm** you will move, you **must** append the matching `mv:*` — 
             '✅ Good: *"Mình quay trái 10 giây nha mv:t:10"*',
             '✅ Good: *"Dạ đi vòng vòng 10 giây nha mv:c:10"*',
             '✅ Good: *"Okie, mình nhảy nha mv:d"*',
+            '✅ Good: *"Okie, mình nhảy theo bài Đồi Hoa Mặt Trời nha mv:d"*',
             '✅ Good: *"Mình nhảy hip-hop nha mv:d2"*',
             '✅ Good: *"Mình nhảy drill cướp biển nha mv:d3"*',
             '✅ Good: *"Mình đi tới, quẹo phải rồi dừng nha mv:f:5 mv:p:5 mv:s"*',
@@ -112,7 +114,7 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:f | forward — đi tới, tiến, đi thẳng, đi lên |
 | mv:b | backward — lùi, đi lùi |
 | mv:c | circle — đi vòng vòng, quay vòng (NOT forward) |
-| mv:d | dance 1 — stream nhạc `./music/` + nhảy theo EQ |
+| mv:d | dance — stream nhạc (thư viện `./music/` hoặc tìm online khi có tên bài hát) + nhảy theo EQ |
 | mv:d2 | dance 2 — hip-hop (stream từ server) |
 | mv:d3 | dance 3 — drill / cướp biển (stream từ server) |
 | mv:ld | alias của `mv:d` (cùng live stream) |
