@@ -106,6 +106,9 @@ def dispatch_control_tags_from_text(
     conn._dispatch_vol_from_assistant_text(
         text, label=label, defer_post_tts=defer_post_tts
     )
+    conn._dispatch_led_from_assistant_text(
+        text, label=label, defer_post_tts=defer_post_tts
+    )
     conn._dispatch_tof_from_assistant_text(
         text, label=label, defer_post_tts=defer_post_tts
     )

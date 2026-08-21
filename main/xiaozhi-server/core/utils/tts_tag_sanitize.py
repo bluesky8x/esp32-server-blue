@@ -1,4 +1,4 @@
-"""Strip device control tags before TTS — speech must never include vol:/wx:/mv:/etc."""
+"""Strip device control tags before TTS — speech must never include vol:/wx:/mv:/led:/etc."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import re
 _TRAILING_PARTIAL_CONTROL_RE = re.compile(
     r"(?:"
     r"\s+vol\s*:?\s*\d{0,3}|"
+    r"\s+led\s*:?\s*\d{0,3}|"
     r"\s+wx\s*:.*|"
     r"\s+tof\s*:?\s*cal(?:\s*:?\s*\d{0,4})?|"
     r"\s+mv\s*:.*|"
@@ -22,9 +23,9 @@ _TRAILING_AT_PARAM_RE = re.compile(
     r"(?:\s+[A-Za-zÀ-ỹ][A-Za-zÀ-ỹ0-9]{0,24})?@[a-z0-9+-]+\s*$",
     re.IGNORECASE,
 )
-# Fast reject before running 7 strip passes / dispatch scans on plain LLM tokens.
+# Fast reject before running strip passes / dispatch scans on plain LLM tokens.
 _CONTROL_TAG_MARKER_RE = re.compile(
-    r"(?:\b(?:vol|wx|tof|mv|mem|char)\s*:|\bsleep\b|@)",
+    r"(?:\b(?:vol|led|wx|tof|mv|mem|char)\s*:|\bsleep\b|@)",
     re.IGNORECASE,
 )
 
@@ -40,6 +41,7 @@ def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:
         return ""
     if not may_contain_control_tags(text):
         return text.strip() if trim_edges else text
+    from core.utils.brightness_tag_codec import strip_led_tags
     from core.utils.character_switch_codec import strip_char_tags
     from core.utils.memory_tag_codec import strip_mem_tags
     from core.utils.robot_move_codec import strip_move_tags
@@ -52,6 +54,7 @@ def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:
     for strip_fn in (
         strip_move_tags,
         strip_vol_tags,
+        strip_led_tags,
         strip_wx_tags,
         strip_tof_tags,
         strip_mem_tags,

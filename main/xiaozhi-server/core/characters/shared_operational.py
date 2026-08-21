@@ -267,6 +267,52 @@ When the user asks to change volume / make it louder / quieter, append **`vol:<0
 ❌ Bad: confirming volume change **without** `vol:N` — the speaker will not change"""
 
 
+def brightness_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") -> str:
+    loc = normalize_operational_locale(locale)
+    if loc == "en":
+        if example_tone == "lili":
+            example = '✅ *"Okie, dimming the light to 50 led:50"*'
+        else:
+            example = '✅ *"Sure, I\'ll set the brightness to 50 led:50"*'
+        return f"""## LED brightness (Blue robot body)
+This robot has a **2-pin 3V LED** whose brightness can be controlled in software (0–100). **Never** tell the user to adjust the LED manually.
+
+When the user asks to change LED brightness / make it brighter / dimmer / turn on / turn off, append **`led:<0-100>`** at the **very end** of your reply (stripped before TTS), same style as `vol:*` tags.
+
+| User asks | You reply (example) |
+|-----------|---------------------|
+| Brighter / turn up light | natural sentence + `led:90` |
+| Dimmer / turn down light | natural sentence + `led:30` |
+| Set brightness to 50 | natural sentence + `led:50` |
+| Turn off the light | natural sentence + `led:0` |
+| Turn on the light | natural sentence + `led:100` |
+
+{example}
+❌ Bad: *"Please adjust it manually"* / *"I can't change the LED"*
+❌ Bad: confirming brightness change **without** `led:N` — the LED will not change"""
+
+    if example_tone == "lili":
+        example = '✅ *"Okie, mình giảm đèn xuống 50 nha led:50"*'
+    else:
+        example = '✅ *"Dạ, mình chỉnh độ sáng xuống 50 nha led:50"*'
+    return f"""## LED brightness (Blue robot body)
+Robot này có đèn **LED 2 chân 3V** điều chỉnh độ sáng bằng phần mềm (0–100). **Không bao giờ** bảo người dùng chỉnh đèn thủ công.
+
+Khi người dùng yêu cầu chỉnh độ sáng / sáng hơn / tối hơn / bật đèn / tắt đèn, thêm **`led:<0-100>`** ở **cuối** câu trả lời (sẽ bị xoá trước TTS), giống `vol:*`.
+
+| Người dùng yêu cầu | Bạn trả lời (ví dụ) |
+|---------------------|----------------------|
+| Tăng độ sáng / sáng hơn | câu tự nhiên + `led:90` |
+| Giảm độ sáng / tối hơn | câu tự nhiên + `led:30` |
+| Điều chỉnh độ sáng 50 | câu tự nhiên + `led:50` |
+| Tắt đèn | câu tự nhiên + `led:0` |
+| Bật đèn | câu tự nhiên + `led:100` |
+
+{example}
+❌ Bad: *"Bạn hãy chỉnh thủ công"* / *"Mình không điều chỉnh được đèn"*
+❌ Bad: xác nhận chỉnh đèn mà **không có** `led:N` — đèn sẽ không thay đổi"""
+
+
 def tof_calibrate_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") -> str:
     loc = normalize_operational_locale(locale)
     if loc == "en":
@@ -519,6 +565,7 @@ def build_operational_sections(*, example_tone: str = "kira", locale: str = "vi"
         (
             robot_move_tags_prompt(example_tone=example_tone, locale=loc),
             volume_tags_prompt(example_tone=example_tone, locale=loc),
+            brightness_tags_prompt(example_tone=example_tone, locale=loc),
             weather_tags_prompt(example_tone=example_tone, locale=loc),
             tof_calibrate_tags_prompt(example_tone=example_tone, locale=loc),
             char_switch,
