@@ -76,6 +76,9 @@ def search_and_download_online_music(
     safe_slug = re.sub(r"[^a-zA-Z0-9\u00C0-\u1EF9_-]+", "_", norm_key)[:40]
     outtmpl = str(target_cache_dir / f"{safe_slug}_[%(id)s]_[{q_hash}].%(ext)s")
 
+    # Target: MP3 at 192kbps ~ 1.44 MB/min → 10 MB ≈ ~7 min cap
+    MAX_FILESIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+
     base_ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": outtmpl,
@@ -90,6 +93,7 @@ def search_and_download_online_music(
         "no_warnings": True,
         "noplaylist": True,
         "socket_timeout": 15,
+        "max_filesize": MAX_FILESIZE_BYTES,  # Skip downloads larger than 10 MB
     }
 
     # Try SoundCloud first, then YouTube search
@@ -105,16 +109,30 @@ def search_and_download_online_music(
                     if entry:
                         title = entry.get("title") or raw_query
                         for mp3_candidate in target_cache_dir.glob(f"*{q_hash}*.mp3"):
-                            if mp3_candidate.is_file():
-                                logger.info(
-                                    "[music] online search success (%s): %s (%s, %d bytes)",
+                            if not mp3_candidate.is_file():
+                                continue
+                            size = mp3_candidate.stat().st_size
+                            if size > MAX_FILESIZE_BYTES:
+                                logger.warning(
+                                    "[music] %s result too large (%d MB > 10 MB), skipping: %s",
                                     provider_name,
-                                    title,
+                                    size // (1024 * 1024),
                                     mp3_candidate.name,
-                                    mp3_candidate.stat().st_size,
                                 )
-                                _ONLINE_MUSIC_CACHE[norm_key] = (mp3_candidate, title)
-                                return mp3_candidate, title
+                                try:
+                                    mp3_candidate.unlink()
+                                except Exception:
+                                    pass
+                                break
+                            logger.info(
+                                "[music] online search success (%s): %s (%s, %d bytes)",
+                                provider_name,
+                                title,
+                                mp3_candidate.name,
+                                size,
+                            )
+                            _ONLINE_MUSIC_CACHE[norm_key] = (mp3_candidate, title)
+                            return mp3_candidate, title
         except Exception as exc:
             logger.warning("[music] %s search failed for %r: %s", provider_name, raw_query, exc)
 
