@@ -1850,6 +1850,20 @@ class ConnectionHandler:
                 return
 
             async def _stream_then_dance() -> None:
+                from core.handle.sendAudioHandle import send_tts_message
+
+                # Hold the device mic off while we fetch/stream the dance music.
+                # An online download can take many seconds; a live mic would let
+                # the user's next request abort the queued dance.
+                try:
+                    await send_tts_message(self, "start", None)
+                    self.logger.bind(tag=TAG).info(
+                        f"[mv] dance mic hold on — device in speaking until music ready"
+                    )
+                except Exception as exc:
+                    self.logger.bind(tag=TAG).warning(
+                        f"[mv] dance mic-hold start failed: {exc}"
+                    )
                 ok = await self._stream_dance_music(track, song_name=song)
                 if not ok:
                     self.logger.bind(tag=TAG).error(
