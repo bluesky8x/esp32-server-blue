@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MatchReason = Literal["search", "online", "dance_track", "random", "no_files", "missing_dir"]
+MatchReason = Literal["search", "cache", "online", "dance_track", "random", "no_files", "missing_dir"]
 
 _EXPLICIT_SONG_MARKERS = re.compile(
     r"(?:"
@@ -200,6 +200,14 @@ def resolve_music_path(
         hit = find_best_music_match(search_q, files)
         if hit:
             return music_dir / hit, "search"
+
+    # 1.5. Check previously downloaded songs (music_cache) before going online
+    if search_q:
+        from core.utils.internet_music import find_cached_online_music
+
+        cached_path, cached_title = find_cached_online_music(search_q)
+        if cached_path and cached_path.is_file():
+            return cached_path, "cache"
 
     # 2. Try online search if requested and song query provided
     if search_q and allow_online_search:

@@ -192,12 +192,27 @@ class TTSProviderBase(ABC):
         if not text:
             return ""
         if tags_sanitized:
-            return self._normalize_tts_text(text)
+            # Never trust upstream: even when the connection tag pipeline claims the
+            # text is already sanitized, strip again so no device/tool tag
+            # (mv:/mem:/vol:/wx:/tof:/char:/sleep) can ever be synthesized.
+            from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
+
+            return self._normalize_tts_text(
+                strip_control_tags_for_tts(text, trim_edges=False)
+            )
         return self._sanitize_tts_text(text)
 
     def to_tts_stream(self, text, opus_handler: Callable[[bytes], None] = None) -> None:
         # 保留原始文本用于显示/上报（queue/buff 已在入队时 sanitize）
         text = textUtils.strip_unwanted_scripts_for_tts(text or "")
+        if not text or not text.strip():
+            return
+        # Final guarantee at synthesis time: this is the full, joined segment text,
+        # so any control tag that was fragmented across stream chunks (e.g. an mv
+        # tag split as "mv:" + "d:song=...") is now reassembled and stripped here.
+        from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
+
+        text = strip_control_tags_for_tts(text, trim_edges=False)
         if not text or not text.strip():
             return
         original_text = text

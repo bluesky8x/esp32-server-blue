@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 _ONLINE_MUSIC_CACHE: dict[str, tuple[Path, str]] = {}
 
 
+class _DownloadTooLargeError(Exception):
+    """Internal signal raised from a yt-dlp progress hook to abort an oversized download."""
+
+
 def _normalize_query_key(query: str) -> str:
     cleaned = re.sub(r"[^\w\s\u00C0-\u1EF9]", " ", query or "", flags=re.UNICODE)
     return re.sub(r"\s+", " ", cleaned).strip().lower()
@@ -28,6 +32,70 @@ def _get_cache_dir(custom_dir: Path | str | None = None) -> Path:
         p = Path(__file__).resolve().parent.parent.parent / "tmp" / "music_cache"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def find_cached_online_music(
+    query: str | None,
+    cache_dir: Path | str | None = None,
+) -> tuple[Path | None, str | None]:
+    """Search the on-disk music cache by song name (fuzzy) — no network.
+
+    Previously downloaded files are named ``<slug>_[<yt id>]_[<hash>].mp3``.
+    This resolves them by title so a known song plays straight from cache
+    instead of triggering a fresh online search/download. Call it before the
+    online step.
+    """
+    if not query or not str(query).strip():
+        return None, None
+    raw_query = str(query).strip()
+    norm_key = _normalize_query_key(raw_query)
+    if not norm_key or len(norm_key) < 2:
+        return None, None
+
+    target = _get_cache_dir(cache_dir)
+    candidates: list[str] = []
+    mapping: dict[str, Path] = {}
+    for mp3 in sorted(target.glob("*.mp3")):
+        stem = mp3.stem
+        # Strip trailing "[<yt id>]_[<hash>]" from the cached filename.
+        title_part = re.sub(r"_\[[^\]]*\]_\[[a-f0-9]{16}\]$", "", stem)
+        title = (title_part or stem).replace("_", " ").strip()
+        if not title:
+            continue
+        key = _normalize_query_key(title)
+        if key in mapping:
+            continue
+        mapping[key] = mp3
+        candidates.append(title)
+
+    if not candidates:
+        return None, None
+
+    from core.utils.music_library import find_best_music_match
+
+    hit = find_best_music_match(norm_key, candidates)
+    if hit:
+        path = mapping.get(_normalize_query_key(hit))
+        if path and path.is_file():
+            logger.info(
+                "[music] cache hit (by name): %s -> %s", raw_query, path.name
+            )
+            return path, hit
+
+    # Fallback: exact query-hash cache key (same lookup as the download path).
+    q_hash = hashlib.sha256(norm_key.encode("utf-8")).hexdigest()[:16]
+    for existing in target.glob(f"*[{q_hash}]*.mp3"):
+        if existing.is_file():
+            title = (
+                existing.stem.split(" [")[0]
+                if " [" in existing.stem
+                else existing.stem
+            )
+            logger.info(
+                "[music] cache hit (by hash): %s -> %s", raw_query, existing.name
+            )
+            return existing, title
+    return None, None
 
 
 def search_and_download_online_music(
@@ -79,6 +147,32 @@ def search_and_download_online_music(
     # Target: MP3 at 192kbps ~ 1.44 MB/min → 10 MB ≈ ~7 min cap
     MAX_FILESIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
+    abort_state = {"triggered": False}
+
+    def _too_large_hook(data: dict) -> None:
+        """Hard-stop the transfer the moment we cross the cap.
+
+        yt-dlp's ``max_filesize`` only works when the provider reports a size up
+        front — YouTube/SoundCloud often don't — so without this hook the whole
+        ~100 MB stream is pulled before any post-check runs.
+        """
+        if data.get("status") != "downloading":
+            return
+        total = int(data.get("total_bytes") or data.get("total_bytes_estimate") or 0)
+        downloaded = int(data.get("downloaded_bytes") or 0)
+        if total > MAX_FILESIZE_BYTES or downloaded > MAX_FILESIZE_BYTES:
+            abort_state["triggered"] = True
+            raise _DownloadTooLargeError(max(total, downloaded))
+
+    def _cleanup_partial() -> None:
+        """Remove .part / .ytdl leftovers from an aborted download."""
+        for leftover in target_cache_dir.glob(f"*{q_hash}*"):
+            if leftover.suffix in (".part", ".ytdl") or ".part" in leftover.name:
+                try:
+                    leftover.unlink()
+                except Exception:
+                    pass
+
     base_ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": outtmpl,
@@ -93,17 +187,23 @@ def search_and_download_online_music(
         "no_warnings": True,
         "noplaylist": True,
         "socket_timeout": 15,
-        "max_filesize": MAX_FILESIZE_BYTES,  # Skip downloads larger than 10 MB
+        "max_filesize": MAX_FILESIZE_BYTES,  # skip if provider reports size > 10 MB
+        "progress_hooks": [_too_large_hook],  # hard-stop mid-stream at 10 MB
     }
 
     # Try SoundCloud first, then YouTube search
     for search_prefix, provider_name in (("scsearch1", "SoundCloud"), ("ytsearch1", "YouTube")):
         try:
+            abort_state["triggered"] = False
             opts = dict(base_ydl_opts)
             opts["default_search"] = search_prefix
             with yt_dlp.YoutubeDL(opts) as ydl:
                 search_query = f"{search_prefix}:{raw_query}"
                 info = ydl.extract_info(search_query, download=True)
+                if abort_state["triggered"]:
+                    # extract_info may swallow the abort; clean up and try next source
+                    _cleanup_partial()
+                    continue
                 if info and "entries" in info and info["entries"]:
                     entry = info["entries"][0]
                     if entry:
@@ -133,6 +233,14 @@ def search_and_download_online_music(
                             )
                             _ONLINE_MUSIC_CACHE[norm_key] = (mp3_candidate, title)
                             return mp3_candidate, title
+        except _DownloadTooLargeError as exc:
+            size_mb = (exc.args[0] if exc.args else 0) // (1024 * 1024)
+            logger.warning(
+                "[music] %s download aborted >10 MB (stopped at ~%d MB), skipping",
+                provider_name,
+                size_mb,
+            )
+            _cleanup_partial()
         except Exception as exc:
             logger.warning("[music] %s search failed for %r: %s", provider_name, raw_query, exc)
 

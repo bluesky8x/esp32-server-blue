@@ -1933,8 +1933,12 @@ class ConnectionHandler:
         if not text or not str(text).strip():
             return
         from core.utils.textUtils import strip_unwanted_scripts_for_tts
+        from core.utils.tts_tag_sanitize import strip_control_tags_for_tts
 
         text = strip_unwanted_scripts_for_tts(str(text))
+        # Final guarantee: no device/tool tag (mv:/mem:/vol:/wx:/tof:/char:/sleep)
+        # may reach the TTS engine, regardless of any upstream hold/strip hiccup.
+        text = strip_control_tags_for_tts(text, trim_edges=False)
         if not text.strip():
             return
         self.tts.tts_text_queue.put(
