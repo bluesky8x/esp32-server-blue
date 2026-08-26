@@ -71,30 +71,47 @@ def find_cached_online_music(
     if not candidates:
         return None, None
 
-    from core.utils.music_library import find_best_music_match
+    from difflib import SequenceMatcher
+
+    from core.utils.music_library import find_best_music_match, normalize_song_key
 
     hit = find_best_music_match(norm_key, candidates)
     if hit:
-        path = mapping.get(_normalize_query_key(hit))
-        if path and path.is_file():
+        # Cache hits must be confident — a weak fuzzy match here would play a
+        # totally different song; prefer falling through to the online search.
+        qk = normalize_song_key(norm_key)
+        hk = normalize_song_key(hit)
+        ratio = SequenceMatcher(None, qk, hk).ratio()
+        if ratio >= 0.6:
+            path = mapping.get(_normalize_query_key(hit))
+            if path and path.is_file():
+                logger.info(
+                    "[music] cache hit (by name): %s -> %s", raw_query, path.name
+                )
+                return path, hit
+        else:
             logger.info(
-                "[music] cache hit (by name): %s -> %s", raw_query, path.name
+                "[music] cache name too weak (%.2f) for %r — going online",
+                ratio,
+                hit,
             )
-            return path, hit
 
     # Fallback: exact query-hash cache key (same lookup as the download path).
+    # NOTE: f"[{q_hash}]" must be a plain substring check — using it inside a
+    # glob (e.g. f"*[{q_hash}]*.mp3") treats the brackets as a CHARACTER CLASS
+    # and matches almost every cached file (the "Tuyết lạnh → baby_shark" bug).
     q_hash = hashlib.sha256(norm_key.encode("utf-8")).hexdigest()[:16]
-    for existing in target.glob(f"*[{q_hash}]*.mp3"):
-        if existing.is_file():
-            title = (
-                existing.stem.split(" [")[0]
-                if " [" in existing.stem
-                else existing.stem
-            )
-            logger.info(
-                "[music] cache hit (by hash): %s -> %s", raw_query, existing.name
-            )
-            return existing, title
+    for existing in target.glob("*.mp3"):
+        if f"[{q_hash}]" not in existing.name:
+            continue
+        if not existing.is_file():
+            continue
+        title_part = re.sub(r"_\[[^\]]*\]_\[[a-f0-9]{16}\]$", "", existing.stem)
+        title = (title_part or existing.stem).replace("_", " ").strip()
+        logger.info(
+            "[music] cache hit (by hash): %s -> %s", raw_query, existing.name
+        )
+        return existing, title
     return None, None
 
 

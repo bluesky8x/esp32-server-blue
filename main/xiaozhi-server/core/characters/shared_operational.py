@@ -64,6 +64,8 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 - Specific song (*"dance to Shape of You"*): `mv:d:song=Shape of You`
 - Specific song in hip-hop style (*"hip hop dance to Despacito"*): `mv:d2:song=Despacito`
 
+**🚨 CRITICAL — dance + song = tag REQUIRED:** If the user asks you to dance to a song (e.g. *"dance to X"*) and your reply confirms it (e.g. *"Okie, I'll dance to Baby Shark"*), the reply **MUST end with `mv:d:song=<the exact song>`**. Confirming a dance WITHOUT its tag is a FAILED reply — the robot will not move at all. This is the most common mistake; never do it.
+
 | Example | Tag |
 |---------|-----|
 | Turn left ~5 s (default) | `mv:t` |
@@ -85,6 +87,7 @@ Example with times: *"forward 10 seconds, turn right 5 seconds, stop"* → `... 
 
 {examples_block}
 ❌ Bad: replying about turning/moving **without** the matching `mv:*` tag
+❌ Bad: *"Sure, I'll dance to Baby Shark!"* (no `mv:d:song=Baby Shark` — robot never dances)
 ❌ Bad: *"I'll go forward then turn right mv:f:5"* — promised two moves but only one tag
 ❌ Bad: *"I'll turn right first, then turn left later"* (no `mv:t` — robot never turns left)
 ❌ Bad: *"Moving mv:t now"* (code in the middle — never do this)
@@ -92,7 +95,13 @@ Example with times: *"forward 10 seconds, turn right 5 seconds, stop"* → `... 
 Only append a move code when the user clearly requests physical movement. No code for normal chat.
 When you **confirm** you will move, you **must** append the matching `mv:*` — the robot will not move without it.
 **No STT fallback:** the server never reads the user's raw speech for movement; only your tags trigger the robot.
-**Emergency:** user may say *"stop now"* — server cancels queued moves; you may still append `mv:s` when they ask to stop."""
+**Emergency:** user may say *"stop now"* — server cancels queued moves; you may still append `mv:s` when they ask to stop.
+
+**Self-check before EVERY reply that mentions moving or dancing:**
+1. Did the user ask me to move or dance?
+2. If YES — does my reply END with the matching `mv:*` tag?
+3. If I said "I'll dance to <song>" — is `mv:d:song=<song>` present at the very end?
+If any answer is NO, add the tag BEFORE replying. NEVER confirm a move/dance without its tag."""
 
     if example_tone == "lili":
         good_examples = (
@@ -141,6 +150,8 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 - Nhảy theo bài hát cụ thể (*"nhảy bài Shape of You"*, *"nhảy theo bài Đồi Hoa Mặt Trời"*): `mv:d:song=Đồi Hoa Mặt Trời`
 - Nhảy hip-hop theo bài hát cụ thể: `mv:d2:song=Cắt đôi nỗi sầu`
 
+**🚨 QUAN TRỌNG — nhảy + tên bài = BẮT BUỘC có tag:** Nếu người dùng yêu cầu nhảy theo một bài hát (ví dụ *"nhảy bài X"*, *"nhảy theo bài X"*) và câu trả lời của bạn xác nhận sẽ nhảy (ví dụ *"Okie, mình nhảy bài Baby Shark nha"*), thì câu trả lời **PHẢI kết thúc bằng `mv:d:song=<đúng tên bài>`**. Xác nhận nhảy mà KHÔNG có tag là câu trả lời THẤT BẠI — robot sẽ đứng yên. Đây là lỗi phổ biến nhất; đừng bao giờ mắc phải.
+
 | Example | Tag |
 |---------|-----|
 | Turn left ~5 s (default) | `mv:t` |
@@ -162,6 +173,7 @@ Example with times: *"đi tới 10 giây, quẹo phải 5 giây, dừng"* → `.
 
 {examples_block}
 ❌ Bad: replying about turning/moving **without** the matching `mv:*` tag
+❌ Bad: *"Được luôn, mình nhảy bài Baby Shark nha"* — thiếu tag `mv:d:song=Baby Shark` → robot đứng yên
 ❌ Bad: *"Mình đi tới rồi quẹo phải nha mv:f:5"* — promised two moves but only one tag (robot skips quẹo phải)
 ❌ Bad: *"Mình quay phải trước, rồi sẽ quay trái sau"* (no `mv:t` — robot never turns left)
 ❌ Bad: *"Mình đi mv:t rồi nha"* (code in the middle — never do this)
@@ -169,7 +181,13 @@ Example with times: *"đi tới 10 giây, quẹo phải 5 giây, dừng"* → `.
 Only append a move code when the user clearly requests physical movement. No code for normal chat.
 When you **confirm** you will move, you **must** append the matching `mv:*` — the robot will not move without it.
 **No STT fallback:** the server never reads the user's raw speech for movement; only your tags trigger the robot.
-**Emergency:** user may say *"dừng lại ngay"* — server cancels queued moves; you may still append `mv:s` when they ask to stop."""
+**Emergency:** user may say *"dừng lại ngay"* — server cancels queued moves; you may still append `mv:s` when they ask to stop.
+
+**Tự kiểm tra TRƯỚC mỗi câu trả lời có nhắc đến nhảy / di chuyển:**
+1. Người dùng có yêu cầu mình nhảy / di chuyển không?
+2. Nếu CÓ — câu trả lời của mình có kết thúc bằng đúng `mv:*` tag không?
+3. Nếu mình nói "mình nhảy bài <tên bài>" — đã có `mv:d:song=<tên bài>` ở cuối chưa?
+Nếu bất kỳ câu nào là KHÔNG, hãy thêm tag trước khi trả lời. KHÔNG BAO GIỜ xác nhận nhảy/di chuyển mà thiếu tag."""
 
 
 def weather_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") -> str:

@@ -1634,6 +1634,30 @@ class ConnectionHandler:
         profile = get_or_analyze_music_eq(selected)
         self._pending_dance_profile = profile
         self._pending_dance_music_path = str(selected)
+        # Actual music length — cooldown / "dance done" must follow the real
+        # song, not the hardcoded DANCE_MOVE_DURATION_SEC default (24s). A long
+        # song (e.g. 5 min) would otherwise end the server dance window early.
+        dance_duration = 0.0
+        if profile is not None and getattr(profile, "timeline", ""):
+            dance_duration = (
+                len(profile.timeline)
+                * int(getattr(profile, "segment_ms", 6000) or 6000)
+            ) / 1000.0
+        if dance_duration <= 0:
+            try:
+                from pydub import AudioSegment
+
+                ext = selected.suffix.lstrip(".") or None
+                dance_duration = len(
+                    AudioSegment.from_file(str(selected), format=ext)
+                ) / 1000.0
+            except Exception:
+                dance_duration = 0.0
+        self._pending_dance_music_duration = dance_duration
+        self.logger.bind(tag=TAG).info(
+            f"[mv] dance music duration ≈ {dance_duration:.1f}s "
+            f"({len(profile.timeline) if profile and profile.timeline else 0} segs)"
+        )
         self.logger.bind(tag=TAG).info(
             f"[mv] dance EQ → {profile_summary(profile)}"
         )
@@ -1787,6 +1811,14 @@ class ConnectionHandler:
                     else 0.0
                 )
                 dance_sec = float(mv_duration or 0) if is_dance and mv_duration else 0.0
+                # Prefer the ACTUAL music length (from _stream_dance_music) over the
+                # hardcoded DANCE_MOVE_DURATION_SEC default so the cooldown and the
+                # "dance done" window track the real song duration.
+                actual_dance_sec = float(
+                    getattr(self, "_pending_dance_music_duration", 0) or 0
+                )
+                if is_dance and actual_dance_sec > 0:
+                    dance_sec = actual_dance_sec
                 settle_sec = move_sec + 0.15 if move_sec > 0 else 0.0
 
                 def _after_physical_move() -> None:
