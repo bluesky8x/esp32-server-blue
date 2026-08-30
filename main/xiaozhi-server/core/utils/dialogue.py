@@ -127,8 +127,45 @@ class Dialogue:
                 # 重复出现诱导模型反复称呼；后续轮不再注入身份，靠对话历史首轮保留
                 if current_speaker_name and current_speaker_name != "未知说话人":
                     speakers = voiceprint_config.get("speakers", [])
+                    # 多用户/管理员特性开关（voiceprint.enroll_enabled）
+                    enroll_enabled = bool(
+                        voiceprint_config.get("enroll_enabled", False)
+                    )
+                    admin_name = (
+                        voiceprint_config.get("admin_name") or "Mr Blue"
+                    ).strip()
+                    is_admin = (
+                        current_speaker_name.strip().lower()
+                        == admin_name.lower()
+                    )
                     speakers_info = "\n<speakers_info>"
-                    speakers_info += f"\n当前说话人：{current_speaker_name}"
+                    if enroll_enabled:
+                        if is_admin:
+                            speakers_info += (
+                                f"\n当前说话人：{current_speaker_name}"
+                                "（admin — 可以保存/修改长期记忆）"
+                            )
+                        else:
+                            speakers_info += (
+                                f"\n当前说话人：{current_speaker_name}"
+                                "（非 admin — 不可保存/修改长期记忆）"
+                            )
+                    else:
+                        speakers_info += (
+                            f"\n当前说话人：{current_speaker_name}"
+                        )
+                    # Rule: khi được hỏi nhận diện giọng nói / ai đang nói / bạn là ai,
+                    # phải trả lời ĐÚNG tên người đang nói phía trên, KHÔNG bịa tên khác.
+                    speakers_info += (
+                        f"\nQuy tắc bắt buộc: nếu người dùng hỏi 'bạn có nhận ra giọng "
+                        f"này không' / 'ai đang nói' / 'bạn là ai' / 'bạn có biết tôi không', "
+                        f"hãy trả lời ĐÚNG tên người đang nói: {current_speaker_name}. "
+                        f"TUYỆT ĐỐI không tự bịa hoặc đoán ra tên khác. "
+                        f"Tên người nói trong memory (preferred_name / inside_jokes) có thể là "
+                        f"dữ liệu cũ sai — phải ưu tiên tên người đang nói hiện tại "
+                        f"({current_speaker_name}) khi xưng hô. "
+                        f"Chỉ nhắc tên khi cần thiết, không lặp lại tên trong mỗi câu trả lời."
+                    )
                     for speaker_str in speakers:
                         try:
                             parts = speaker_str.split(",", 2)

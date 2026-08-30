@@ -1,0 +1,24 @@
+# Local voiceprint service (3D-Speaker) configuration.
+# Copy/edit as needed; env vars take precedence (VOICEPRINT_*).
+
+# Bearer token / ?key= that the xiaozhi-server must use.
+key: "abcd"
+
+# ModelScope speaker-verification model. CAM++ (zh+en, 200k speakers) is a good
+# default for low latency on CPU. Alternatives:
+#   iic/speech_eres2net_sv_zh-cn_16k-common        (higher accuracy, heavier)
+#   iic/speech_eres2netv2_sv_zh-cn_16k-common      (best EER, heavier)
+model_id: "iic/speech_campplus_sv_zh_en_16k-common_advanced"
+model_revision: "v1.0.0"
+
+# Minimum similarity (0..1) for /identify to return a speaker_id.
+# The xiaozhi-server ALSO applies its own similarity_threshold on top.
+threshold: 0.55
+
+# Where enrolled voice samples (WAVs) + index are stored (mount a volume here
+# to keep them across rebuilds).
+data_dir: "data"
+
+device: "cpu"   # or "cuda:0" if you have a GPU
+host: "0.0.0.0"
+port: 8005

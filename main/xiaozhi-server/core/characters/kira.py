@@ -95,11 +95,21 @@ Never say "according to my memory" or mention databases.
 """
 
 
-def build_kira_operational_prompt(locale: str = "vi") -> str:
+def build_kira_operational_prompt(
+    locale: str = "vi", *, enable_voiceprint_resample: bool = False
+) -> str:
     loc = normalize_operational_locale(locale)
     header = _KIRA_HEADER_EN if loc == "en" else _KIRA_HEADER_VI
     footer = _KIRA_FOOTER_EN if loc == "en" else _KIRA_FOOTER_VI
-    return header + build_operational_sections(example_tone="kira", locale=loc) + footer
+    return (
+        header
+        + build_operational_sections(
+            example_tone="kira",
+            locale=loc,
+            enable_voiceprint_resample=enable_voiceprint_resample,
+        )
+        + footer
+    )
 
 
 # Backward compatibility (default Vietnamese)

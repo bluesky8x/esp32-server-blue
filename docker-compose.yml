@@ -46,6 +46,34 @@ services:
     networks:
       - blue
 
+  # Self-hosted local speaker recognition (3D-Speaker). Fully offline after the
+  # model is downloaded once from ModelScope. Point server voiceprint.url at:
+  #   http://<lan-ip>:8005/voiceprint/health?key=<VOICEPRINT_KEY>
+  voiceprint-local:
+    build:
+      context: ./docker/voiceprint-local
+      dockerfile: Dockerfile
+    image: esp32-server-blue-voiceprint:latest
+    container_name: blue-voiceprint-local
+    restart: unless-stopped
+    ports:
+      - "${VOICEPRINT_PORT:-8005}:8005"
+    environment:
+      TZ: ${TZ:-UTC}
+      VOICEPRINT_KEY: ${VOICEPRINT_KEY:-abcd}
+      VOICEPRINT_THRESHOLD: ${VOICEPRINT_THRESHOLD:-0.55}
+      VOICEPRINT_MODEL_ID: ${VOICEPRINT_MODEL_ID:-iic/speech_campplus_sv_zh_en_16k-common_advanced}
+      VOICEPRINT_DEVICE: ${VOICEPRINT_DEVICE:-cpu}
+    volumes:
+      - voiceprint-data:/app/data
+      - voiceprint-cache:/app/.cache/modelscope
+    networks:
+      - blue
+
 networks:
   blue:
     driver: bridge
+
+volumes:
+  voiceprint-data:
+  voiceprint-cache:

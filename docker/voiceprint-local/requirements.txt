@@ -1,0 +1,27 @@
+# --- 3D-Speaker / ModelScope speaker verification ---
+modelscope>=1.16.0
+torch>=2.1.0
+torchaudio>=2.1.0
+numpy>=1.24
+addict>=2.4.0
+dataclasses-json
+simplejson
+datasets>=2.0
+sortedcontainers
+pandas
+kaldiio
+librosa>=0.10
+scipy
+einops
+tqdm
+Pillow
+opencv-python-headless
+
+# --- API server ---
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+PyYAML>=6.0
+
+# --- audio decode (wav uploads from the robot) ---
+soundfile>=0.12

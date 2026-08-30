@@ -75,12 +75,39 @@ def hold_incomplete_mem_suffix(text: str) -> tuple[str, str]:
     return text, ""
 
 
+def _speaker_can_write_memory(conn: "ConnectionHandler") -> bool:
+    """Long-term memory may be written only by the admin (Mr Blue).
+
+    This is part of the multi-user voice feature — gated behind
+    ``voiceprint.enroll_enabled``. When voice recognition is not configured
+    OR the feature flag is off, memory writes stay enabled (legacy behavior).
+    """
+    store = getattr(conn, "voice_user_store", None)
+    if store is None:
+        return True
+    if not getattr(store, "enroll_enabled", False):
+        return True
+    return store.is_admin_speaker(getattr(conn, "current_speaker", None))
+
+
 def apply_mem_tags_from_assistant_text(
     conn: "ConnectionHandler", text: str, *, label: str = ""
 ) -> bool:
     tags = extract_mem_tags(text)
     if not tags:
         return False
+
+    # Admin-only: only Mr Blue may ask the robot to save/change memory.
+    if not _speaker_can_write_memory(conn):
+        logger = getattr(conn, "logger", None)
+        if logger:
+            logger.bind(tag="mem_tag").info(
+                f"[mem] blocked — only admin may save memory "
+                f"(speaker={getattr(conn, 'current_speaker', None)!r}, "
+                f"from={label or 'assistant'})"
+            )
+        return False
+
     from core.characters.character_registry import get_active_character, get_store
 
     character = get_active_character(conn)

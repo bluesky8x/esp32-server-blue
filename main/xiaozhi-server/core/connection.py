@@ -145,6 +145,9 @@ class ConnectionHandler:
 
         # 为每个连接单独管理声纹识别
         self.voiceprint_provider = None
+        self.voice_user_store = None
+        self._last_voice_wav = None
+        self._voice_enroll_state = None
 
         # vad相关变量
         self.client_audio_buffer = bytearray()
@@ -732,6 +735,8 @@ class ConnectionHandler:
             self._init_prompt_enhancement()
             """注入工具调用few-shot示例（仅function_call模式）"""
             self._inject_tool_call_fewshot()
+            """注入 move/dance few-shot（plain text — mọi intent mode）"""
+            self._inject_move_fewshots()
 
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"实例化组件失败: {e}")
@@ -745,6 +750,7 @@ class ConnectionHandler:
             get_operational_prompt(
                 self.active_character or self.config.get("character") or "kira",
                 getattr(self, "active_locale", "vi"),
+                enable_voiceprint_resample=self._voice_enroll_enabled(),
             ),
             self.device_id,
             self.client_ip,
@@ -2053,6 +2059,50 @@ class ConnectionHandler:
         save_tag_hold_to_tc(tc, hold)
         self._put_tts_stream_text(sentence_id, spoken)
 
+    def _put_plain_fewshot_pair(self, user: str, response: str) -> None:
+        """Chèn cặp user/assistant dạng text thuần (không cần tool-call)."""
+        self.dialogue.put(Message(role="user", content=user, is_temporary=True))
+        self.dialogue.put(
+            Message(role="assistant", content=response, is_temporary=True)
+        )
+
+    def _inject_move_fewshots(self):
+        """Chèn few-shot di chuyển/nhảy dạng plain text — chạy được ở mọi intent
+        mode (kể cả nointent). Mẫu tổng quát: tên bài có thể là BẤT KỲ bài nào
+        người dùng nêu; server tự tìm nhạc (local/cache/online).
+        (function_call mode đã có sẵn few-shot dạng tool-call riêng.)
+        """
+        if self.intent_type == "function_call":
+            return
+        locale = getattr(self, "active_locale", None) or "vi"
+        if str(locale).lower() == "en":
+            pairs = [
+                ("Turn left", "Turning left now mv:t"),
+                ("Turn right", "Turning right mv:p"),
+                ("Dance for me", "Sure, dancing now mv:d"),
+                (
+                    "Dance to Baby Shark",
+                    "Sure, dancing to Baby Shark mv:d:song=Baby Shark",
+                ),
+                ("Stop please", "Okay, stopping now mv:s"),
+            ]
+        else:
+            pairs = [
+                ("Kita ơi quẹo trái đi", "Mình đi sang trái nha mv:t"),
+                ("Kita ơi quay phải đi", "Mình quay phải nha mv:p"),
+                ("Kita ơi nhảy đi", "Okie, mình nhảy nha mv:d"),
+                (
+                    "Nhảy theo bài Baby Shark đi",
+                    "Okie, mình nhảy theo bài Baby Shark nha mv:d:song=Baby Shark",
+                ),
+                ("Dừng lại đi", "Okie, mình dừng nha mv:s"),
+            ]
+        for user, response in pairs:
+            self._put_plain_fewshot_pair(user, response)
+        self.logger.bind(tag=TAG).debug(
+            f"已注入 move/dance few-shot 示例 (plain text, locale={locale})"
+        )
+
     def _inject_tool_call_fewshot(self):
         """注入工具调用 few-shot 示例到对话历史。
         结构：正样本（工具调用示例）放在动态 system 之前，可命中前缀缓存；
@@ -2310,20 +2360,45 @@ class ConnectionHandler:
         return asr
 
     def _initialize_voiceprint(self):
-        """为当前连接初始化声纹识别"""
+        """为当前连接初始化声纹识别（含本地用户档案 + 多用户录入）"""
         try:
             voiceprint_config = self.config.get("voiceprint", {})
             if voiceprint_config:
                 voiceprint_provider = VoiceprintProvider(voiceprint_config)
                 if voiceprint_provider is not None and voiceprint_provider.enabled:
+                    from core.utils.voice_user_store import VoiceUserStore
+
                     self.voiceprint_provider = voiceprint_provider
-                    self.logger.bind(tag=TAG).info("声纹识别功能已在连接时动态启用")
+                    self.voice_user_store = VoiceUserStore(voiceprint_config)
+                    # 预置 admin（Mr Blue）到本地映射，首次即可识别 admin
+                    voiceprint_provider.add_speaker(
+                        self.voice_user_store.admin_speaker_id,
+                        self.voice_user_store.admin_name,
+                        "Admin (Mr Blue)",
+                    )
+                    # 恢复历史录入的用户到本地映射
+                    for sid, info in dict(
+                        self.voice_user_store.users
+                    ).items():
+                        voiceprint_provider.add_speaker(
+                            sid, info.get("name", sid), info.get("description", "")
+                        )
+                    self.logger.bind(tag=TAG).info(
+                        f"声纹识别功能已在连接时动态启用 "
+                        f"(admin={self.voice_user_store.admin_name}, "
+                        f"users={len(self.voice_user_store.users)}, "
+                        f"multi-user feature={self.voice_user_store.enroll_enabled})"
+                    )
                 else:
                     self.logger.bind(tag=TAG).warning("声纹识别功能启用但配置不完整")
             else:
                 self.logger.bind(tag=TAG).info("声纹识别功能未启用")
         except Exception as e:
             self.logger.bind(tag=TAG).warning(f"声纹识别初始化失败: {str(e)}")
+
+    def _voice_enroll_enabled(self) -> bool:
+        """True when the multi-user voice feature (voiceprint.enroll_enabled) is on."""
+        return bool(getattr(self.voice_user_store, "enroll_enabled", False))
 
     async def _background_initialize(self):
         """在后台初始化配置和组件（完全不阻塞主循环）"""
@@ -2585,7 +2660,11 @@ class ConnectionHandler:
             auto_extract=self._character_memory_auto_extract(),
         )
         enhanced = self.prompt_manager.refresh_device_prompt(
-            get_operational_prompt(character, getattr(self, "active_locale", "vi")),
+            get_operational_prompt(
+                character,
+                getattr(self, "active_locale", "vi"),
+                enable_voiceprint_resample=self._voice_enroll_enabled(),
+            ),
             self.device_id,
             self.client_ip,
             active_character=character,
@@ -2722,12 +2801,11 @@ class ConnectionHandler:
                 )
                 memory_str = future.result()
 
-            # 仅在该说话人首次出现时把身份注入 system，之后靠对话历史首轮保留，
-            # 避免每轮在 system 重复出现名字诱导模型反复称呼
+            # 每轮都把当前说话人身份注入 system（dialogue 内附规则：只在被问及时
+            # 用名字，不在每句重复称呼），确保模型不会遗忘/编造说话人名字。
             speaker_for_system = None
             cs = (self.current_speaker or "").strip()
-            if cs and cs != "未知说话人" and cs not in self.system_introduced_speakers:
-                self.system_introduced_speakers.add(cs)
+            if cs and cs != "未知说话人":
                 speaker_for_system = cs
 
             if self.intent_type == "function_call" and functions is not None:

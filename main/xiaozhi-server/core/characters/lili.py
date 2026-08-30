@@ -95,11 +95,21 @@ Never say "according to my memory" or mention databases.
 """
 
 
-def build_lili_operational_prompt(locale: str = "vi") -> str:
+def build_lili_operational_prompt(
+    locale: str = "vi", *, enable_voiceprint_resample: bool = False
+) -> str:
     loc = normalize_operational_locale(locale)
     header = _LILI_HEADER_EN if loc == "en" else _LILI_HEADER_VI
     footer = _LILI_FOOTER_EN if loc == "en" else _LILI_FOOTER_VI
-    return header + build_operational_sections(example_tone="lili", locale=loc) + footer
+    return (
+        header
+        + build_operational_sections(
+            example_tone="lili",
+            locale=loc,
+            enable_voiceprint_resample=enable_voiceprint_resample,
+        )
+        + footer
+    )
 
 
 LILI_OPERATIONAL_PROMPT = build_lili_operational_prompt("vi")

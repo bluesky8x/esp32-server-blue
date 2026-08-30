@@ -31,6 +31,10 @@ from core.utils.tts_tag_sanitize import (
     strip_control_tags_for_tts,
 )
 from core.utils.weather_tag_codec import hold_incomplete_wx_suffix
+from core.utils.voiceprint_tag_codec import (
+    apply_vpr_tags_from_assistant_text,
+    hold_incomplete_vpr_suffix,
+)
 
 if TYPE_CHECKING:
     from core.connection import ConnectionHandler
@@ -43,12 +47,13 @@ class TagStreamHold:
     char: str = ""
     mem: str = ""
     sleep: str = ""
+    vpr: str = ""
 
     def merged_prefix(self) -> str:
-        return self.mv + self.char + self.mem + self.sleep + self.wx
+        return self.mv + self.char + self.mem + self.sleep + self.vpr + self.wx
 
     def has_suffix_hold(self) -> bool:
-        return bool(self.char or self.mem or self.sleep or self.wx)
+        return bool(self.char or self.mem or self.sleep or self.vpr or self.wx)
 
     def clear(self) -> None:
         self.mv = ""
@@ -56,6 +61,7 @@ class TagStreamHold:
         self.char = ""
         self.mem = ""
         self.sleep = ""
+        self.vpr = ""
 
 
 def get_tag_hold_from_conn(conn: ConnectionHandler) -> TagStreamHold:
@@ -103,6 +109,7 @@ def dispatch_control_tags_from_text(
         apply_mem_tags_from_assistant_text(conn, text, label=label)
     apply_char_switch_from_assistant_text(conn, text, label=label)
     apply_sleep_tag_from_assistant_text(conn, text, label=label)
+    apply_vpr_tags_from_assistant_text(conn, text, label=label)
     conn._dispatch_vol_from_assistant_text(
         text, label=label, defer_post_tts=defer_post_tts
     )
@@ -166,10 +173,11 @@ def process_assistant_stream_chunk(
         new_text = hold.merged_prefix() + (new_text or "")
         hold.clear()
     elif hold.has_suffix_hold():
-        suffix = hold.char + hold.mem + hold.sleep + hold.wx
+        suffix = hold.char + hold.mem + hold.sleep + hold.vpr + hold.wx
         hold.char = ""
         hold.mem = ""
         hold.sleep = ""
+        hold.vpr = ""
         hold.wx = ""
         new_text = suffix + (new_text or "")
 
@@ -191,6 +199,7 @@ def process_assistant_stream_chunk(
     work, hold.char = hold_incomplete_char_suffix(raw)
     work, hold.mem = hold_incomplete_mem_suffix(work)
     work, hold.sleep = hold_incomplete_sleep_suffix(work)
+    work, hold.vpr = hold_incomplete_vpr_suffix(work)
     work, hold.wx = hold_incomplete_wx_suffix(work, allow_complete=flush)
 
     mv_steps: list = []

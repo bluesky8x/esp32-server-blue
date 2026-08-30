@@ -79,6 +79,7 @@ async def startToChat(conn: "ConnectionHandler", text, *, system_prompt: bool = 
     # 检查输入是否是JSON格式（包含说话人信息）
     speaker_name = None
     actual_text = text
+    content_text = text
 
     try:
         # 尝试解析JSON格式的输入
@@ -87,11 +88,17 @@ async def startToChat(conn: "ConnectionHandler", text, *, system_prompt: bool = 
             if "speaker" in data and "content" in data:
                 speaker_name = data["speaker"]
                 actual_content = data["content"]
+                content_text = actual_content
                 conn.logger.bind(tag=TAG).info(f"解析到说话人信息: {speaker_name}")
 
                 # 仅在该说话人首次出现时保留 {"speaker":...} JSON，让模型自然称呼一次；
-                # 后续轮降为纯文本，避免每轮重复出现名字诱导模型反复称呼
-                if speaker_name not in conn.introduced_speakers:
+                # 后续轮降为纯文本，避免每轮重复出现名字诱导模型反复称呼。
+                # 未知说话人（未知说话人）不保留 JSON：JSON 里的 CJK 名字会让
+                # is_unintelligible_asr 误判整段为乱码 → 机器人反复报"gián đoạn"。
+                if (
+                    speaker_name not in conn.introduced_speakers
+                    and speaker_name != "未知说话人"
+                ):
                     conn.introduced_speakers.add(speaker_name)
                     actual_text = text
                 else:
@@ -126,6 +133,13 @@ async def startToChat(conn: "ConnectionHandler", text, *, system_prompt: bool = 
         from core.handle.intentHandler import speak_txt
 
         speak_txt(conn, pick_emergency_stop_ack(conn))
+        return
+
+    # 声纹身份注册流程：未知说话人引导录入新用户、admin 重新采样。
+    # 若当前轮被录入流程消费，则不再进入正常 LLM 对话。
+    from core.utils.voice_enroll import handle_voice_enroll_turn
+
+    if await handle_voice_enroll_turn(conn, speaker_name, content_text):
         return
 
     # 如果当日的输出字数大于限定的字数

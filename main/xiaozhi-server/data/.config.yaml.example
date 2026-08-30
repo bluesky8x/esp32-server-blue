@@ -82,3 +82,29 @@ plugins:
     provider: open_meteo
     default_location: "Ho Chi Minh City"
     prefer_country: "VN"
+
+# --- Speaker recognition (multi-user) — SELF-HOSTED local 3D-Speaker service ---
+# Deploy the local service first:  ./run-voiceprint.sh up
+#   -> http://<lan-ip>:8005/voiceprint/health?key=abcd
+#
+# FEATURE FLAG: enroll_enabled: false (default) = legacy behavior
+#   - no onboarding, no admin re-sample, memory not gated.
+# Set enroll_enabled: true to turn ON the multi-user / admin feature:
+#   * Mr Blue = admin (reserved name; only he may save/change memory).
+#   * Unknown voice -> robot asks the name, samples & registers the user.
+#   * Admin re-sample: say "tái lập mẫu giọng nói admin" + password "abcd1234".
+#
+# voiceprint:
+#   url: http://192.168.68.71:8005/voiceprint/health?key=abcd
+#   similarity_threshold: 0.55
+#   # seed speakers (optional): "speaker_id,name,description"
+#   speakers:
+#     - "mr_blue,Mr Blue,Admin (Mr Blue)"
+#   # admin identity / enrollment (feature flag)
+#   admin_name: "Mr Blue"
+#   admin_password: "abcd1234"
+#   reserved_names:
+#     - "admin"
+#     - "quản trị viên"
+#   enroll_enabled: false
+#   user_store_path: data/voice_users.json

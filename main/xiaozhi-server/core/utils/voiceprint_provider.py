@@ -43,10 +43,11 @@ class VoiceprintProvider:
                 logger.bind(tag=TAG).error("URL中未找到key参数，声纹识别将被禁用")
                 self.enabled = False
             else:
-                # 构造identify接口地址
+                # 构造identify / register 接口地址
                 self.api_url = f"{base_url}/voiceprint/identify"
-                
-                # 提取speaker_ids
+                self.register_url = f"{base_url}/voiceprint/register"
+
+                # 提取speaker_ids（种子说话人，可选；支持运行时动态添加）
                 for speaker_str in self.speakers:
                     try:
                         parts = speaker_str.split(",", 2)
@@ -55,19 +56,21 @@ class VoiceprintProvider:
                             self.speaker_ids.append(speaker_id)
                     except Exception:
                         continue
-                
-                # 检查是否有有效的说话人配置
-                if not self.speaker_ids:
-                    logger.bind(tag=TAG).warning("未配置有效的说话人，声纹识别将被禁用")
-                    self.enabled = False
+
+                # 进行健康检查，验证服务器是否可用（无需预置说话人即可启用，
+                # 新用户可运行时注册）
+                if self._check_server_health():
+                    self.enabled = True
+                    logger.bind(tag=TAG).info(
+                        f"声纹识别已启用: API={self.api_url}, "
+                        f"说话人={len(self.speaker_ids)}个, "
+                        f"相似度阈值={self.similarity_threshold}"
+                    )
                 else:
-                    # 进行健康检查，验证服务器是否可用
-                    if self._check_server_health():
-                        self.enabled = True
-                        logger.bind(tag=TAG).info(f"声纹识别已启用: API={self.api_url}, 说话人={len(self.speaker_ids)}个, 相似度阈值={self.similarity_threshold}")
-                    else:
-                        self.enabled = False
-                        logger.bind(tag=TAG).warning(f"声纹识别服务器不可用，声纹识别已禁用: {self.api_url}")
+                    self.enabled = False
+                    logger.bind(tag=TAG).warning(
+                        f"声纹识别服务器不可用，声纹识别已禁用: {self.api_url}"
+                    )
     
     def _parse_speakers(self) -> Dict[str, Dict[str, str]]:
         """解析说话人配置"""
@@ -137,6 +140,71 @@ class VoiceprintProvider:
         
         return is_healthy
     
+    def add_speaker(
+        self, speaker_id: str, name: str, description: str = ""
+    ) -> None:
+        """注册一个说话人到本地映射（下次识别即可返回该名字）。"""
+        if not speaker_id or not name:
+            return
+        if speaker_id not in self.speaker_ids:
+            self.speaker_ids.append(speaker_id)
+        self.speaker_map[speaker_id] = {
+            "name": name,
+            "description": description or "",
+        }
+        logger.bind(tag=TAG).info(
+            f"[voiceprint] speaker registered locally: {name} (id={speaker_id})"
+        )
+
+    async def register_speaker(
+        self, speaker_id: str, wav_data: bytes
+    ) -> bool:
+        """注册/更新某个说话人的声纹样本到声纹服务。
+
+        POST /voiceprint/register（Bearer token，multipart：speaker_id + file）
+        """
+        if not self.enabled or not getattr(self, "register_url", None):
+            logger.bind(tag=TAG).warning("声纹注册不可用：声纹识别未启用")
+            return False
+        if not wav_data:
+            logger.bind(tag=TAG).warning("声纹注册失败：无音频数据")
+            return False
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Accept": "application/json",
+        }
+        data = aiohttp.FormData()
+        data.add_field("speaker_id", speaker_id)
+        data.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
+
+        timeout = aiohttp.ClientTimeout(total=15)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    self.register_url, headers=headers, data=data
+                ) as response:
+                    if response.status in (200, 201):
+                        try:
+                            result = await response.json()
+                        except Exception:
+                            result = {}
+                        logger.bind(tag=TAG).info(
+                            f"[voiceprint] register ok: {speaker_id} -> {result}"
+                        )
+                        return True
+                    logger.bind(tag=TAG).error(
+                        f"[voiceprint] register failed: HTTP {response.status} "
+                        f"(speaker_id={speaker_id})"
+                    )
+                    return False
+        except asyncio.TimeoutError:
+            logger.bind(tag=TAG).error("[voiceprint] register timeout")
+            return False
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"[voiceprint] register error: {e}")
+            return False
+
     async def identify_speaker(self, audio_data: bytes, session_id: str) -> Optional[str]:
         """识别说话人"""
         if not self.enabled or not self.api_url or not self.api_key:

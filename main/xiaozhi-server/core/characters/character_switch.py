@@ -122,7 +122,11 @@ def apply_active_character(conn: "ConnectionHandler", character_id: str) -> bool
 
     conn.active_character = character_id
     conn.config["prompt"] = get_operational_prompt(
-        character_id, getattr(conn, "active_locale", None)
+        character_id,
+        getattr(conn, "active_locale", None),
+        enable_voiceprint_resample=bool(
+            getattr(getattr(conn, "voice_user_store", None), "enroll_enabled", False)
+        ),
     )
     conn._character_switch_until = time.time() + 2.0
 

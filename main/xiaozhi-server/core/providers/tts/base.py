@@ -547,7 +547,9 @@ class TTSProviderBase(ABC):
             text = None
             try:
                 try:
-                    item = self.tts_audio_queue.get(timeout=0.1)
+                    # Short poll so the first audio frame is picked up fast
+                    # after synthesis (was 0.1s).
+                    item = self.tts_audio_queue.get(timeout=0.02)
                     if len(item) == 4:
                         sentence_type, audio_datas, text, sentence_id = item
                     else:

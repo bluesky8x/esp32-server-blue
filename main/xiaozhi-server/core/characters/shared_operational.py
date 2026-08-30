@@ -65,6 +65,8 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 - Specific song in hip-hop style (*"hip hop dance to Despacito"*): `mv:d2:song=Despacito`
 
 **🚨 CRITICAL — dance + song = tag REQUIRED:** If the user asks you to dance to a song (e.g. *"dance to X"*) and your reply confirms it (e.g. *"Okie, I'll dance to Baby Shark"*), the reply **MUST end with `mv:d:song=<the exact song>`**. Confirming a dance WITHOUT its tag is a FAILED reply — the robot will not move at all. This is the most common mistake; never do it.
+Even if you are unsure of the exact title or the user's speech was misheard and you correct the name (e.g. user said *"Cách đôi nỗi sầu"*, you reply *"Cắt đôi nỗi sầu"*), you **STILL must append `mv:d:song=<the title you used>`** — correcting a name is not an excuse to skip the tag. Missing tag = robot stands still = FAILED reply.
+**Never hesitate because you think the song might not be available** — the server searches local music files, previously downloaded songs, and online to play it. It works with **ANY song name**. Your only job is to append `mv:d:song=<song>`; finding/playing the music is the server's job. A dance reply without the tag is always FAILED, regardless of the song.
 
 | Example | Tag |
 |---------|-----|
@@ -151,6 +153,8 @@ Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
 - Nhảy hip-hop theo bài hát cụ thể: `mv:d2:song=Cắt đôi nỗi sầu`
 
 **🚨 QUAN TRỌNG — nhảy + tên bài = BẮT BUỘC có tag:** Nếu người dùng yêu cầu nhảy theo một bài hát (ví dụ *"nhảy bài X"*, *"nhảy theo bài X"*) và câu trả lời của bạn xác nhận sẽ nhảy (ví dụ *"Okie, mình nhảy bài Baby Shark nha"*), thì câu trả lời **PHẢI kết thúc bằng `mv:d:song=<đúng tên bài>`**. Xác nhận nhảy mà KHÔNG có tag là câu trả lời THẤT BẠI — robot sẽ đứng yên. Đây là lỗi phổ biến nhất; đừng bao giờ mắc phải.
+Kể cả khi bạn không chắc chắn tên bài hoặc người dùng nói sai bị nghe nhầm và bạn sửa lại tên (ví dụ người dùng nói *"Cách đôi nỗi sầu"*, bạn đáp *"Cắt đôi nỗi sầu"*), bạn **VẪN PHẢI thêm `mv:d:song=<tên bài bạn dùng>`** — sửa tên bài không phải lý do để bỏ tag. Thiếu tag = robot đứng yên = câu trả lời THẤT BẠI.
+**Đừng bao giờ do dự vì sợ bài không có sẵn** — server tự tìm nhạc (thư mục local, nhạc đã tải trước đó, hoặc online) để phát. Nó hoạt động với **BẤT KỲ tên bài nào**. Việc duy nhất của bạn là thêm `mv:d:song=<tên bài>`; tìm và phát nhạc là việc của server. Câu trả lời nhảy mà thiếu tag luôn THẤT BẠI, bất kể tên bài.
 
 | Example | Tag |
 |---------|-----|
@@ -542,7 +546,86 @@ When the user shares **stable facts** worth remembering later (name, likes, pref
 **No STT fallback** — only your `mem:*` tags write long-term memory (same as `mv:*` / `sleep`)."""
 
 
-def build_operational_sections(*, example_tone: str = "kira", locale: str = "vi") -> str:
+def voiceprint_resample_tag_prompt(*, locale: str = "vi") -> str:
+    """vpr:resample tag — admin re-enrolls the admin voice sample."""
+    loc = normalize_operational_locale(locale)
+    if loc == "en":
+        return """## Voice tags (REQUIRED — only when asked)
+
+### 1) Admin voice re-sample — `vpr:resample`
+When the user asks to re-record / re-sample the admin voice (e.g. "re-sample the
+admin voice", "re-record my voice", "re-establish the admin voice"), you **MUST**
+append `vpr:resample` at the very **end** of your reply — no exceptions.
+
+✅ User: *"re-sample the admin voice"* → *"Sure. Please say the confirmation password. vpr:resample"*
+❌ *"Sure. Please say the confirmation password."* (no tag — FAILED, nothing happens)
+
+**🚨 CRITICAL:** Confirming a re-sample request WITHOUT the `vpr:resample` tag is
+a FAILED reply — the flow never starts. Do NOT verify the password yourself; you
+only ask for the password and append the tag.
+
+### 2) New-user enrollment — `vpr:enroll` or `vpr:enroll:<name>`
+ONLY when the **admin** asks to make friends with / add a new user (e.g. *"Lucy
+wants to make friends with you"*, *"register the voice for Lucy"*, *"introduce a
+new person named X"*), you **MUST** append `vpr:enroll:<new user's name>` at the
+very **end** of your reply. The name comes from the admin's request — never make
+one up.
+
+✅ Admin: *"Lucy wants to make friends with you"* → *"Nice to meet you, Lucy! Please
+read a sentence out loud so I can save your voice. vpr:enroll:Lucy"*
+- **If you address the new user by name in your reply (e.g. "Bông ơi, ..."), you
+  MUST put that exact name in the tag: `vpr:enroll:Bông`. Never speak a name
+  without mirroring it in the tag** — a bare `vpr:enroll` makes the robot ask the
+  name again.
+- If the admin does NOT name the new user: use `vpr:enroll` (the robot asks the name).
+- If the admin only says a name without asking to register (e.g. "Lucy is here"),
+  do **NOT** emit the tag — it is NOT an enrollment request.
+- **Unknown/new voices are IGNORED by default** — never proactively ask "what's
+  your name" or try to register someone just because their voice is not recognized.
+- Self-check: did the ADMIN ask to add/register a new user? If yes → my reply ends
+  with `vpr:enroll[:<name>]` and the name I spoke is in the tag. If not → no tag."""
+    return """## Tag giọng nói (BẮT BUỘC — chỉ khi được yêu cầu)
+
+### 1) Tái lập giọng nói admin — `vpr:resample`
+Khi người dùng yêu cầu ghi lại / tái lập / thiết lập lại mẫu giọng nói admin
+(ví dụ: "tái lập mẫu giọng nói admin", "phải lập mẫu giọng nói admin", "ghi lại
+giọng admin", "lập lại giọng nói admin"), bạn **PHẢI** thêm `vpr:resample` vào
+**cuối** câu trả lời — không ngoại lệ.
+
+✅ Người dùng: *"tái lập mẫu giọng nói admin"* → *"Vâng ạ. Vui lòng nói mật khẩu xác nhận nhé. vpr:resample"*
+❌ *"Vâng ạ. Vui lòng nói mật khẩu xác nhận nhé."* (thiếu tag — THẤT BẠI, không làm gì cả)
+
+**🚨 QUAN TRỌNG:** Xác nhận yêu cầu tái lập giọng mà **thiếu** tag `vpr:resample`
+là câu trả lời THẤT BẠI. Đừng tự xác minh mật khẩu; bạn chỉ nhắc nói mật khẩu xác
+nhận và thêm tag.
+
+### 2) Đăng ký người dùng mới — `vpr:enroll` hoặc `vpr:enroll:<tên>`
+CHỈ khi **admin** yêu cầu làm quen / kết bạn / đăng ký giọng cho người mới
+(ví dụ: *"bạn Lucy muốn làm quen với bạn"*, *"đăng ký giọng nói cho Lucy"*,
+*"giới thiệu người mới tên X"*), bạn **PHẢI** thêm `vpr:enroll:<tên người mới>`
+vào **cuối** câu trả lời. Tên lấy từ lời yêu cầu của admin — không tự bịa.
+
+✅ Admin: *"bạn Lucy muốn làm quen với bạn"* → *"Dạ, mình rất vui được làm quen. Lucy ơi,
+vui lòng đọc lại một đoạn khoảng 5 giây để mình lưu giọng nói của bạn nhé. vpr:enroll:Lucy"*
+- **Nếu trong câu trả lời bạn gọi tên người mới (vd "Bông ơi, ..."), bạn BẮT BUỘC
+  phải đưa ĐÚNG tên đó vào tag: `vpr:enroll:Bông`. Không bao giờ gọi tên trong lời
+  nói mà tag lại thiếu tên** — `vpr:enroll` trống sẽ khiến robot hỏi lại tên.
+- Nếu admin KHÔNG nêu tên người mới: dùng `vpr:enroll` (robot sẽ tự hỏi tên).
+- Nếu admin chỉ nhắc tên mà KHÔNG yêu cầu đăng ký (vd: "Lucy đang ở đây") → KHÔNG
+  thêm tag — đó không phải yêu cầu đăng ký.
+- **Giọng lạ mặc định bị BỎ QUA** — không bao giờ chủ động hỏi "bạn tên gì" hay
+  đăng ký ai đó chỉ vì giọng chưa được nhận diện.
+- Tự kiểm tra: admin có yêu cầu thêm/đăng ký người mới không? Nếu CÓ → câu trả lời
+  kết thúc bằng `vpr:enroll[:<tên>]` và tên bạn đã gọi trong lời nói phải nằm trong
+  tag. Nếu KHÔNG → không thêm tag."""
+
+
+def build_operational_sections(
+    *,
+    example_tone: str = "kira",
+    locale: str = "vi",
+    enable_voiceprint_resample: bool = False,
+) -> str:
     """All shared tag sections for one character tone + locale."""
     loc = normalize_operational_locale(locale)
     char_switch = (
@@ -551,14 +634,15 @@ def build_operational_sections(*, example_tone: str = "kira", locale: str = "vi"
         else character_switch_prompt_kira(locale=loc)
     )
     mem_compact = example_tone == "lili"
-    return "\n\n".join(
-        (
-            robot_move_tags_prompt(example_tone=example_tone, locale=loc),
-            volume_tags_prompt(example_tone=example_tone, locale=loc),
-            weather_tags_prompt(example_tone=example_tone, locale=loc),
-            tof_calibrate_tags_prompt(example_tone=example_tone, locale=loc),
-            char_switch,
-            sleep_tag_prompt(example_tone=example_tone, locale=loc),
-            memory_tags_prompt(compact=mem_compact, locale=loc),
-        )
-    )
+    sections = [
+        robot_move_tags_prompt(example_tone=example_tone, locale=loc),
+        volume_tags_prompt(example_tone=example_tone, locale=loc),
+        weather_tags_prompt(example_tone=example_tone, locale=loc),
+        tof_calibrate_tags_prompt(example_tone=example_tone, locale=loc),
+        char_switch,
+        sleep_tag_prompt(example_tone=example_tone, locale=loc),
+        memory_tags_prompt(compact=mem_compact, locale=loc),
+    ]
+    if enable_voiceprint_resample:
+        sections.append(voiceprint_resample_tag_prompt(locale=loc))
+    return "\n\n".join(sections)

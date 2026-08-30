@@ -192,6 +192,8 @@ class ASRProviderBase(ABC):
             wav_data = None
             if conn.voiceprint_provider and combined_pcm_data:
                 wav_data = self._pcm_to_wav(combined_pcm_data)
+            # 供声纹录入流程使用（admin 重新采样 / 新用户录入取当前这句音频）
+            conn._last_voice_wav = wav_data or None
 
             # 定义ASR任务
             from core.utils.language_runtime import prepare_asr_for_next_turn

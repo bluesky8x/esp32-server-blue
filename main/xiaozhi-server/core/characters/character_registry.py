@@ -56,16 +56,25 @@ def get_active_character(conn) -> str | None:
     return resolve_character_id(char)
 
 
-def get_operational_prompt(character: str, locale: str | None = None) -> str:
+def get_operational_prompt(
+    character: str,
+    locale: str | None = None,
+    *,
+    enable_voiceprint_resample: bool = False,
+) -> str:
     character = resolve_character_id(character) or character.lower()
     loc = (locale or "vi").lower()
     if character == "lili":
         from core.characters.lili import build_lili_operational_prompt
 
-        return build_lili_operational_prompt(loc)
+        return build_lili_operational_prompt(
+            loc, enable_voiceprint_resample=enable_voiceprint_resample
+        )
     from core.characters.kira import build_kira_operational_prompt
 
-    return build_kira_operational_prompt(loc)
+    return build_kira_operational_prompt(
+        loc, enable_voiceprint_resample=enable_voiceprint_resample
+    )
 
 
 def get_store(character: str):
