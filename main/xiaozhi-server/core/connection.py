@@ -48,6 +48,9 @@ from core.utils import textUtils
 
 TAG = __name__
 
+# Per-speaker dialogue bucket used when voiceprint returns the unknown marker.
+_UNKNOWN_DIALOGUE_BUCKET = "__unknown__"
+
 auto_import_modules("plugins_func.functions")
 
 
@@ -175,6 +178,11 @@ class ConnectionHandler:
 
         # llm相关变量
         self.dialogue = Dialogue()
+        # Multi-user conversation context: each registered speaker keeps their
+        # own last discussion so topics don't mix between users.
+        self._user_dialogues: dict = {}
+        self._active_dialogue_user: str | None = None
+        self._user_context_last_saved: dict = {}  # bucket -> last file save (epoch s)
 
         # tts相关变量
         self.sentence_id = None
@@ -2679,6 +2687,129 @@ class ConnectionHandler:
         # 更新系统prompt至上下文
         self.dialogue.update_system_message(self.prompt)
 
+    def _dialogue_bucket(self) -> str | None:
+        """Bucket key for the current speaker. None = don't segment (voiceprint off)."""
+        speaker = (getattr(self, "current_speaker", None) or "").strip()
+        if not speaker:
+            return None
+        if speaker == "未知说话人":
+            return _UNKNOWN_DIALOGUE_BUCKET
+        return speaker
+
+    def _active_character_name(self) -> str:
+        """Name of the current character (kira/lili) — used as the context folder."""
+        try:
+            from core.characters.character_registry import get_active_character
+
+            name = get_active_character(self)
+            if name:
+                return str(name)
+        except Exception:
+            pass
+        return str(
+            getattr(self, "active_character", None)
+            or (self.config or {}).get("character")
+            or "kira"
+        )
+
+    def _ensure_user_context_loaded(self, bucket: str) -> None:
+        """Load a speaker's persisted conversation from disk into memory if absent."""
+        if bucket == _UNKNOWN_DIALOGUE_BUCKET:
+            # Unrecognized voices are ephemeral — never load/persist context for them.
+            return
+        if not hasattr(self, "_user_dialogues"):
+            self._user_dialogues = {}
+        if bucket in self._user_dialogues:
+            return
+        from core.utils.user_context_store import load_context
+
+        pairs = load_context(self._active_character_name(), bucket)
+        if not pairs:
+            self._user_dialogues[bucket] = []
+            return
+        self._user_dialogues[bucket] = [
+            Message(role=role, content=content) for role, content in pairs
+        ]
+        logger = getattr(self, "logger", None)
+        if logger:
+            logger.bind(tag=TAG).info(
+                f"[dialogue] loaded persisted context for {bucket!r} ({len(pairs)} msgs)"
+            )
+
+    def _schedule_user_context_save(self, bucket: str) -> None:
+        """Async-save a speaker's conversation if it hasn't been saved for >2 min."""
+        if bucket == _UNKNOWN_DIALOGUE_BUCKET:
+            # Unrecognized voices are ephemeral — never save context for them.
+            return
+        if not hasattr(self, "_user_context_last_saved"):
+            self._user_context_last_saved = {}
+        if not hasattr(self, "_user_dialogues"):
+            return
+        msgs = self._user_dialogues.get(bucket) or []
+        pairs = [(m.role, m.content) for m in msgs if m.content]
+        if not pairs:
+            return
+        now = time.time()
+        if now - self._user_context_last_saved.get(bucket, 0) < 120:
+            return
+        self._user_context_last_saved[bucket] = now
+        character = self._active_character_name()
+        try:
+            from core.utils.user_context_store import save_context
+
+            def _worker():
+                save_context(character, bucket, pairs)
+
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception as exc:
+            logger = getattr(self, "logger", None)
+            if logger:
+                logger.bind(tag=TAG).warning(
+                    f"[dialogue] context save spawn failed: {exc}"
+                )
+
+    def _switch_dialogue_for_speaker(self) -> None:
+        """Keep a separate conversation history per speaker so multiple users'
+        topics don't mix. Called before appending a new user turn."""
+        bucket = self._dialogue_bucket()
+        if bucket is None:
+            return
+        if not hasattr(self, "_user_dialogues"):
+            self._user_dialogues = {}
+        if bucket == getattr(self, "_active_dialogue_user", None):
+            # Same speaker: ensure context is loaded (first turn) + periodic async save.
+            self._ensure_user_context_loaded(bucket)
+            self._schedule_user_context_save(bucket)
+            return
+
+        # Save the current conversation to the previous speaker's slot (+ file).
+        active = getattr(self, "_active_dialogue_user", None)
+        history = [
+            m for m in self.dialogue.dialogue
+            if m.role != "system" and not m.is_temporary
+        ]
+        if active:
+            self._user_dialogues[active] = history
+            self._schedule_user_context_save(active)
+
+        # Clear history but keep the system message + few-shot (temporary) examples.
+        self.dialogue.dialogue = [
+            m for m in self.dialogue.dialogue
+            if m.role == "system" or m.is_temporary
+        ]
+
+        # Load (memory or disk) and restore the new speaker's own history.
+        self._ensure_user_context_loaded(bucket)
+        for m in self._user_dialogues.get(bucket, []):
+            self.dialogue.put(m)
+        self._active_dialogue_user = bucket
+        logger = getattr(self, "logger", None)
+        if logger:
+            logger.bind(tag=TAG).info(
+                f"[dialogue] switched per-speaker context -> {bucket!r} "
+                f"(history={len(self._user_dialogues.get(bucket, []))} msgs)"
+            )
+
     def chat(self, query, depth=0):
         # 保存当前任务的sentence_id到局部变量，避免被新任务覆盖
         current_sentence_id = None
@@ -2746,6 +2877,9 @@ class ConnectionHandler:
             self._robot_move_cooldown_until = 0.0
             self._robot_move_shutdown = False
             self._robot_move_pump_handle = None
+            # Multi-user: load the current speaker's own conversation context
+            # (saving the previous speaker's) so topics don't mix.
+            self._switch_dialogue_for_speaker()
             self.dialogue.put(Message(role="user", content=query))
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
