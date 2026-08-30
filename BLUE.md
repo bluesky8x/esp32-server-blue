@@ -386,24 +386,43 @@ Default stack is optimized for **Vietnamese**. When the user speaks/writes **Eng
 |-----------|-------------------|----------------|
 | ASR `language` | `vi` | `en` |
 | ASR prompt | Vietnamese diacritics, anti-Thai | English-only |
-| TTS voice | `vi-VN-HoaiMyNeural` | `en-US-JennyNeural` |
+| TTS backend | VieNeu v3 (local, 8882) | **Kokoro-82M** (local, 8883) |
+| TTS voice | `Thục Đoan` | `af_heart` (female US) |
 | TTS normalize | Vietnamese spacing fixes | off |
 
-Detection: diacritics / Vietnamese keywords → `vi`; mostly ASCII → `en`. Explicit: *"speak English"*, *"nói tiếng anh"*.
+**TTS routing is LLM-tag driven.** The LLM marks its reply language with a leading
+tag, the server parses it, switches locale, and routes to the matching local backend:
+
+```
+[locale=en] Hello! How are you?   →  Kokoro (8883), af_heart
+[locale=vi] Dạ, mình khỏe nha     →  VieNeu (8882), Thục Đoan
+```
+
+- Tag is **stripped before TTS** — the robot never speaks `[locale=...]`.
+- The tag also drives ASR locale for the next turn (sticky per connection).
+- Vietnamese replies need **no tag** (locale stays `vi` by default).
 
 ```yaml
 language_runtime:
   default_locale: vi
   locales:
     vi:
-      asr_language: vi
-      tts_voice: vi-VN-HoaiMyNeural
+      tts_voice: vieneu-v3-turbo
+      tts_speeches_voice: Thục Đoan
     en:
-      asr_language: en
-      tts_voice: en-US-JennyNeural
+      tts_voice: kokoro-v1.0
+      tts_speeches_voice: af_heart
+TTS:
+  CustomTTS:
+    url: "http://host.docker.internal:8882/v1/audio/speech"   # vi default
+    locales:
+      en:
+        url: "http://host.docker.internal:8883/v1/audio/speech"  # Kokoro
+        model: kokoro-v1.0
+        voice: af_heart
 ```
 
-Log: `[locale] vi → en (user_text)` on switch.
+Log: `[locale] LLM tag -> en (…label…)` on switch.
 
 ## Robot motion (`mv:*`)
 
@@ -464,6 +483,7 @@ TTS runs in its own Compose project (`docker/tts/docker-compose.yml`), independe
 |--------|--------|------|----------|
 | VieNeu v3 Turbo | `./run-vieneu-tts.sh up` | 8882 | Best Vietnamese quality (CPU/ONNX) |
 | Piper / Speaches | `./run-tts.sh setup` | 8881 | Fast vi/en, smaller download |
+| Kokoro-82M | `./run-kokoro-tts.sh up` | 8883 | Best English quality on CPU (female US voices) |
 
 Optional env: `cp docker/tts/.env.example docker/tts/.env`
 
@@ -577,6 +597,72 @@ TTS:
 Override port/voice via `docker/tts/.env`: `VIENEU_TTS_PORT`, `VIENEU_DEFAULT_VOICE`.
 
 For NVIDIA GPU hosts, upstream also supports LMDeploy v2 server (`pnnbao/vieneu-tts:serve`) — see [VieNeu-TTS](https://github.com/pnnbao97/VieNeu-TTS).
+
+### Kokoro-82M (best English on CPU)
+
+[Kokoro-82M](https://github.com/hexgrad/kokoro) is an 82M-param open-weight TTS
+with excellent **English** quality that runs on CPU. It has no Vietnamese model,
+so it is used only for `en` replies (VieNeu keeps `vi`). Runs via
+[kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (ONNX, ~548 MB image).
+
+```bash
+chmod +x run-kokoro-tts.sh
+./run-kokoro-tts.sh up       # build + start on :8883 (downloads model first time)
+./run-kokoro-tts.sh test     # → /tmp/blue-kokoro-en.wav
+./run-kokoro-tts.sh voices   # list female voices (af_heart, af_bella, af_nicole, …)
+```
+
+Female US voices: `af_heart` (default), `af_alloy`, `af_bella`, `af_jessica`,
+`af_nicole`, `af_sarah`, `af_sky`, … Override with `KOKORO_DEFAULT_VOICE` env
+(or the `en.voice` block in `data/.config.yaml`).
+
+In `main/xiaozhi-server/data/.config.yaml` (both Vi and En local):
+
+```yaml
+selected_module:
+  TTS: CustomTTS
+
+language_runtime:
+  default_locale: vi
+  locales:
+    vi:
+      tts_voice: vieneu-v3-turbo
+      tts_speeches_voice: Thục Đoan
+    en:
+      tts_voice: kokoro-v1.0
+      tts_speeches_voice: af_heart
+
+TTS:
+  CustomTTS:
+    type: custom
+    method: POST
+    url: "http://127.0.0.1:8882/v1/audio/speech"      # vi → VieNeu
+    default_voice: Thục Doan
+    format: wav
+    output_dir: tmp/
+    params:
+      input: "{prompt_text}"
+      model: "{model}"
+      voice: "{voice}"
+      response_format: "wav"
+      speed: 1.0
+    locales:
+      en:
+        url: "http://127.0.0.1:8883/v1/audio/speech"  # en → Kokoro
+        model: kokoro-v1.0
+        voice: af_heart
+        format: wav
+        params:
+          input: "{prompt_text}"
+          model: "kokoro-v1.0"
+          voice: "{voice}"
+          response_format: "wav"
+          speed: 1.0
+```
+
+The server routes `vi` → `url` (VieNeu) and `en` → `locales.en.url` (Kokoro).
+The LLM marks reply language with a leading `[locale=en]` tag (see
+[Language runtime](#language-runtime-vi--en)).
 
 ## Digital human (browser)
 

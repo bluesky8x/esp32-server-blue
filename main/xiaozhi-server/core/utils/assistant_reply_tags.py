@@ -13,6 +13,12 @@ from core.utils.character_switch_codec import (
     apply_char_switch_from_assistant_text,
     hold_incomplete_char_suffix,
 )
+from core.utils.language_runtime import apply_locale_to_connection  # noqa: F401  (re-export convenience)
+from core.utils.locale_tag_codec import (
+    apply_locale_tag_from_assistant_text,
+    extract_locale_from_assistant_text,
+    hold_incomplete_locale_suffix,
+)
 from core.utils.memory_tag_codec import (
     apply_mem_tags_from_assistant_text,
     hold_incomplete_mem_suffix,
@@ -48,12 +54,13 @@ class TagStreamHold:
     mem: str = ""
     sleep: str = ""
     vpr: str = ""
+    locale: str = ""
 
     def merged_prefix(self) -> str:
-        return self.mv + self.char + self.mem + self.sleep + self.vpr + self.wx
+        return self.locale + self.mv + self.char + self.mem + self.sleep + self.vpr + self.wx
 
     def has_suffix_hold(self) -> bool:
-        return bool(self.char or self.mem or self.sleep or self.vpr or self.wx)
+        return bool(self.locale or self.char or self.mem or self.sleep or self.vpr or self.wx)
 
     def clear(self) -> None:
         self.mv = ""
@@ -62,6 +69,7 @@ class TagStreamHold:
         self.mem = ""
         self.sleep = ""
         self.vpr = ""
+        self.locale = ""
 
 
 def get_tag_hold_from_conn(conn: ConnectionHandler) -> TagStreamHold:
@@ -107,6 +115,16 @@ def dispatch_control_tags_from_text(
         return
     if apply_mem:
         apply_mem_tags_from_assistant_text(conn, text, label=label)
+    # Per-reply language routing — must run before TTS so the backend is chosen.
+    if extract_locale_from_assistant_text(text):
+        applied = apply_locale_tag_from_assistant_text(conn, text, label=label)
+        if applied:
+            locale = extract_locale_from_assistant_text(text)
+            logger = getattr(conn, "logger", None)
+            if logger:
+                logger.bind(tag="locale_tag").info(
+                    f"[locale] LLM tag -> {locale} ({label})"
+                )
     apply_char_switch_from_assistant_text(conn, text, label=label)
     apply_sleep_tag_from_assistant_text(conn, text, label=label)
     apply_vpr_tags_from_assistant_text(conn, text, label=label)
@@ -173,7 +191,8 @@ def process_assistant_stream_chunk(
         new_text = hold.merged_prefix() + (new_text or "")
         hold.clear()
     elif hold.has_suffix_hold():
-        suffix = hold.char + hold.mem + hold.sleep + hold.vpr + hold.wx
+        suffix = hold.locale + hold.char + hold.mem + hold.sleep + hold.vpr + hold.wx
+        hold.locale = ""
         hold.char = ""
         hold.mem = ""
         hold.sleep = ""
@@ -197,6 +216,7 @@ def process_assistant_stream_chunk(
 
     raw = new_text or ""
     work, hold.char = hold_incomplete_char_suffix(raw)
+    work, hold.locale = hold_incomplete_locale_suffix(work)
     work, hold.mem = hold_incomplete_mem_suffix(work)
     work, hold.sleep = hold_incomplete_sleep_suffix(work)
     work, hold.vpr = hold_incomplete_vpr_suffix(work)

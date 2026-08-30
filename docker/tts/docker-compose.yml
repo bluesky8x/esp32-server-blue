@@ -56,6 +56,25 @@ services:
       retries: 10
       start_period: 300s
 
+  kokoro-tts:
+    profiles: ["kokoro"]
+    build:
+      context: ../kokoro
+      dockerfile: Dockerfile
+    image: blue-kokoro-tts:latest
+    container_name: blue-kokoro-tts
+    restart: unless-stopped
+    ports:
+      - "${KOKORO_TTS_PORT:-8883}:8883"
+    environment:
+      KOKORO_DEFAULT_VOICE: ${KOKORO_DEFAULT_VOICE:-af_heart}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8883/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
 volumes:
   speaches-hf-cache:
   vieneu-hf-cache:

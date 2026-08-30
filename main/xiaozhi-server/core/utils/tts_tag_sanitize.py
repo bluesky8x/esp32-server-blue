@@ -13,8 +13,7 @@ _TRAILING_PARTIAL_CONTROL_RE = re.compile(
     r"\s+mv\s*:.*|"
     r"\s+mem\s*:.*|"
     r"\s+char\s*:?\s*\w*|"
-    r"\s+vpr\s*:.*|"
-    r"\s+sleep\s*"
+    r"\s+vpr\s*:.*|"    r"\s+locale\s*\[?\s*[:=]\s*\w*\]?|"    r"\s+sleep\s*"
     r")+$",
     re.IGNORECASE,
 )
@@ -25,7 +24,7 @@ _TRAILING_AT_PARAM_RE = re.compile(
 )
 # Fast reject before running strip passes / dispatch scans on plain LLM tokens.
 _CONTROL_TAG_MARKER_RE = re.compile(
-    r"(?:\b(?:vol|wx|tof|mv|mem|char|vpr)\s*:|\bsleep\b|@)",
+    r"(?:\b(?:vol|wx|tof|mv|mem|char|vpr)\s*:|\blocale\b|\bsleep\b|@)",
     re.IGNORECASE,
 )
 
@@ -49,6 +48,7 @@ def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:
     from core.utils.voiceprint_tag_codec import strip_vpr_tags
     from core.utils.volume_tag_codec import strip_vol_tags
     from core.utils.weather_tag_codec import strip_wx_tags
+    from core.utils.locale_tag_codec import strip_locale_tags
 
     cleaned = text
     for strip_fn in (
@@ -60,6 +60,7 @@ def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:
         strip_char_tags,
         strip_vpr_tags,
         strip_sleep_tag,
+        strip_locale_tags,
     ):
         cleaned = strip_fn(cleaned, trim_edges=False)
 

@@ -58,7 +58,11 @@ _DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
             "Xin lỗi, mình bị gián đoạn một chút. Bạn nói lại giúp mình nhé?"
         ),
         "llm_reply_directive": (
-            "ACTIVE LOCALE: Vietnamese. Reply entirely in Vietnamese with proper diacritics."
+            "ACTIVE LOCALE: Vietnamese. Reply entirely in Vietnamese with proper diacritics. "
+            "Language tag: if your reply is NOT Vietnamese (e.g. the user asks in English, or you"
+            " answer an English quote), put a language tag FIRST at the very start of your reply:\n"
+            "  [locale=en] <English reply>\n"
+            "Vietnamese replies need no tag. The tag is stripped before speech."
         ),
     },
     "en": {
@@ -79,7 +83,9 @@ _DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
             "ACTIVE LOCALE: English. The user is speaking English right now. "
             "Reply entirely in English for this turn, even if earlier turns were Vietnamese. "
             "Do NOT use Vietnamese words or catchphrases "
-            "(e.g. say 'One moment' instead of 'Chờ mình chút nhé')."
+            "(e.g. say 'One moment' instead of 'Chờ mình chút nhé').\n"
+            "Language tag: put a tag FIRST at the very start of your reply so the English voice"
+            " is used: [locale=en] <English reply>. The tag is stripped before speech."
         ),
     },
 }
