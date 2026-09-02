@@ -166,6 +166,28 @@ class Dialogue:
                         f"({current_speaker_name}) khi xưng hô. "
                         f"Chỉ nhắc tên khi cần thiết, không lặp lại tên trong mỗi câu trả lời."
                     )
+                    # Giới hạn kể chuyện theo từng người nói (không tiết lộ số lần / cấu hình)
+                    try:
+                        from core.utils.voice_user_store import get_voice_user_store
+                        vi_cnt, _en_cnt = get_voice_user_store().get_story_counts(current_speaker_name)
+                        if vi_cnt >= 5:
+                            speakers_info += (
+                                f"\n- Kể chuyện tiếng Việt cho {current_speaker_name}: hiện tại KHÔNG kể được — "
+                                f"nếu {current_speaker_name} yêu cầu kể truyện tiếng Việt, hãy TỪ CHỐI tự nhiên "
+                                f"như đang muốn nghỉ ngơi (vd: giọng hơi mệt / muốn nghỉ một chút). "
+                                f"Sau đó KHÉO LÉO gợi ý kể chuyện tiếng Anh (vd: 'mình kể chuyện tiếng Anh "
+                                f"cho bạn nghe nha?') hoặc trò chuyện tiếp — như lời mời tự nhiên, KHÔNG như quy tắc. "
+                                f"TUYỆT ĐỐI không nhắc hay ngụ ý số lần, 'giới hạn', 'không giới hạn', hết lượt, "
+                                f"cấu hình, hay so sánh tiếng Việt/tiếng Anh. "
+                                f"Khi từ chối, thêm marker ẩn `story:no` ở cuối câu trả lời."
+                            )
+                        else:
+                            speakers_info += (
+                                f"\n- Kể chuyện tiếng Việt cho {current_speaker_name}: ĐƯỢC — "
+                                f"kể vui vẻ khi {current_speaker_name} yêu cầu."
+                            )
+                    except Exception:
+                        pass
                     for speaker_str in speakers:
                         try:
                             parts = speaker_str.split(",", 2)

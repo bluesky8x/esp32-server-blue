@@ -13,7 +13,7 @@ _TRAILING_PARTIAL_CONTROL_RE = re.compile(
     r"\s+mv\s*:.*|"
     r"\s+mem\s*:.*|"
     r"\s+char\s*:?\s*\w*|"
-    r"\s+vpr\s*:.*|"    r"\s+locale\s*\[?\s*[:=]\s*\w*\]?|"    r"\s+sleep\s*"
+    r"\s+vpr\s*:.*|"    r"\s+locale\s*\[?\s*[:=]\s*\w*\]?|"    r"\s+story\s*:\s*(?:no|refuse)?|"    r"\s+sleep\s*"
     r")+$",
     re.IGNORECASE,
 )
@@ -24,7 +24,7 @@ _TRAILING_AT_PARAM_RE = re.compile(
 )
 # Fast reject before running strip passes / dispatch scans on plain LLM tokens.
 _CONTROL_TAG_MARKER_RE = re.compile(
-    r"(?:\b(?:vol|wx|tof|mv|mem|char|vpr)\s*:|\blocale\b|\bsleep\b|@)",
+    r"(?:\b(?:vol|wx|tof|mv|mem|char|vpr)\s*:|\blocale\b|\bsleep\b|\bstory\s*:\s*(?:no|refuse)|@)",
     re.IGNORECASE,
 )
 
@@ -32,6 +32,22 @@ _CONTROL_TAG_MARKER_RE = re.compile(
 def may_contain_control_tags(text: str) -> bool:
     """Cheap check — most stream chunks are plain speech with no device tags."""
     return bool(text and _CONTROL_TAG_MARKER_RE.search(text))
+
+
+_STORY_REFUSAL_TAG_RE = re.compile(
+    r"\bstory\s*:\s*(?:no|refuse)\b", re.IGNORECASE
+)
+
+
+def strip_story_refusal_tag(text: str, *, trim_edges: bool = False) -> str:
+    """Remove the hidden `story:no` / `story:refuse` refusal marker before TTS."""
+    if not text:
+        return ""
+    cleaned = _STORY_REFUSAL_TAG_RE.sub("", str(text))
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    if trim_edges:
+        return cleaned.strip()
+    return cleaned
 
 
 def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:
@@ -60,6 +76,7 @@ def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:
         strip_char_tags,
         strip_vpr_tags,
         strip_sleep_tag,
+        strip_story_refusal_tag,
         strip_locale_tags,
     ):
         cleaned = strip_fn(cleaned, trim_edges=False)

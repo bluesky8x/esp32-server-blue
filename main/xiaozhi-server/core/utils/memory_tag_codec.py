@@ -109,13 +109,18 @@ def apply_mem_tags_from_assistant_text(
         return False
 
     from core.characters.character_registry import get_active_character, get_store
+    from core.characters.character_memory import resolve_memory_scope
 
     character = get_active_character(conn)
     if not character:
         return False
-    device_id = conn.device_id or "default"
+    scope = resolve_memory_scope(getattr(conn, "current_speaker", None))
     store = get_store(character)
-    changed = store.apply_mem_tags(device_id, tags)
+    changed = store.apply_mem_tags(
+        scope,
+        tags,
+        speaker_name=(getattr(conn, "current_speaker", None) or "").strip() or None,
+    )
     if not changed:
         return False
     logger = getattr(conn, "logger", None)

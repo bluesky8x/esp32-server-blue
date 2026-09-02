@@ -13,7 +13,7 @@ LLM dialogue with correct roles:
     assistant: Dạ, mình nhớ bạn thích cà phê
 
 Rules:
-- ``save_context`` writes today's file, capped at ``MAX_LINES`` (100) lines.
+- ``save_context`` writes today's file, capped at ``MAX_LINES`` (20) lines.
 - ``load_context`` loads the most recent ``CONTEXT_KEEP_DAYS`` (3) day files.
 - Files older than ``STALE_CONTEXT_DAYS`` (3) days are auto-deleted.
 - ``save_context`` is a plain sync call — call it from a background thread.
@@ -28,7 +28,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-MAX_LINES = 100  # max lines kept per day file
+MAX_LINES = 20  # max lines kept per day file (smaller context per user)
 SAVE_INTERVAL_SEC = 120  # only save if the last save is older than 2 minutes
 CONTEXT_KEEP_DAYS = 3  # load the 3 most recent day files into context
 STALE_CONTEXT_DAYS = 3  # delete day files older than this

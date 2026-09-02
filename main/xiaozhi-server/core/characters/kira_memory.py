@@ -10,5 +10,5 @@ def get_store() -> CharacterMemoryStore:
     return CharacterMemoryStore("kira")
 
 
-def render_full_memory(device_id: str) -> str:
-    return _render_full_memory("kira", device_id)
+def render_full_memory(scope: str | None) -> str:
+    return _render_full_memory("kira", scope)

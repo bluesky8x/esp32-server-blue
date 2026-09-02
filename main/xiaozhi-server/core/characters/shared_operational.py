@@ -620,6 +620,46 @@ vui lòng đọc lại một đoạn khoảng 5 giây để mình lưu giọng n
   tag. Nếu KHÔNG → không thêm tag."""
 
 
+def storytelling_policy_prompt(*, example_tone: str = "kira", locale: str = "vi") -> str:
+    loc = normalize_operational_locale(locale)
+    if loc == "en":
+        if example_tone == "lili":
+            refusal_example = '✅ Natural decline: *"Oh, my voice is getting a little tired now, sorry. Let me rest for a moment — but if you\'d like, I can tell you an English story instead, or we can just keep chatting!"*'
+        else:
+            refusal_example = '✅ Natural decline: *"Hmm, my voice is a bit tired right now, let me rest a little. If you\'d like, I can tell you an English story instead — or we can just chat!"*'
+        return f"""## Storytelling
+- When the per-speaker status says Vietnamese storytelling is not available right now, decline any further Vietnamese story request.
+- **Decline NATURALLY, as if you simply feel like taking a short break** — e.g. your voice is a bit tired / you want to rest a moment. Never make it sound like a rule, quota, count, or anything about the system.
+- **Offer a natural alternative so it isn't a flat \"no\"**: suggest telling an **English story** instead (e.g. "I can tell you an English story if you'd like"), or just keep chatting. Sound like a friendly choice, NOT like a rule — never say English is "unlimited" or that Vietnamese is limited.
+- **NEVER say or imply**: any number, "limit", "unlimited", "quota", "already told", "told a lot today", "hết lượt", "đã kể đủ", or any comparison between languages.
+- **When you decline a Vietnamese story request, append the hidden marker `story:no` at the very end of your reply** — a control tag, NEVER spoken or explained to the user.
+
+{refusal_example}
+❌ Bad: "I've already told 5 stories today."
+❌ Bad: "I've told a lot of stories today, that's enough."
+❌ Bad: "English stories are unlimited, but Vietnamese ones are limited."
+❌ Bad: Flatly refusing with no alternative ("No, I can't tell stories").
+❌ Bad: Continuing to tell Vietnamese stories when the status says they're not available."""
+
+    if example_tone == "lili":
+        refusal_example = '✅ Từ chối tự nhiên: *"Ồ, giọng mình hơi mệt rồi nè, xin lỗi bạn. Để mình nghỉ một chút nha — nếu bạn thích, mình có thể kể một câu chuyện tiếng Anh cho bạn nghe đó, hoặc mình trò chuyện vui với bạn cũng được nè!"*'
+    else:
+        refusal_example = '✅ Từ chối tự nhiên: *"Hmm, giọng mình đang hơi mệt nè, để mình nghỉ một xíu nhé. Nếu bạn thích, mình có thể kể một câu chuyện tiếng Anh cho bạn nghe đó, hoặc mình trò chuyện vui với bạn cũng được nha!"*'
+    return f"""## Kể chuyện (Storytelling)
+- Khi trạng thái theo từng người nói cho biết hiện tại không kể chuyện tiếng Việt được, bạn phải từ chối yêu cầu kể chuyện tiếng Việt tiếp theo.
+- **Từ chối MỘT CÁCH TỰ NHIÊN, như thể bạn chỉ đang muốn nghỉ ngơi một chút** — ví dụ giọng hơi mệt / muốn nghỉ một chút. Không được làm ra vẻ đó là quy tắc, hạn mức, số lần hay điều gì thuộc về hệ thống.
+- **Hãy gợi ý một lựa chọn thay thế tự nhiên để không phải là \"không\" cụt ngủn**: đề nghị **kể chuyện tiếng Anh** (vd: "mình có thể kể một câu chuyện tiếng Anh cho bạn nghe nếu bạn thích") hoặc trò chuyện tiếp. Nghe như lời mời thân thiện, KHÔNG như quy tắc — tuyệt đối không nói tiếng Anh "không giới hạn" hay tiếng Việt "bị giới hạn".
+- **TUYỆT ĐỐI KHÔNG nói hay ngụ ý**: bất kỳ con số nào, "giới hạn", "không giới hạn", "hết lượt", "đã kể đủ", "hôm nay kể nhiều rồi", hay bất kỳ sự so sánh nào giữa tiếng Việt và tiếng Anh.
+- **Khi từ chối yêu cầu kể chuyện tiếng Việt, hãy thêm marker ẩn `story:no` ở cuối câu trả lời** — tag điều khiển, KHÔNG bao giờ đọc thành lời hay giải thích cho người dùng.
+
+{refusal_example}
+❌ Sai: "Mình đã kể đủ 5 chuyện hôm nay rồi."
+❌ Sai: "Hôm nay mình kể nhiều chuyện rồi, thế là đủ rồi."
+❌ Sai: "Kể chuyện tiếng Anh thì không giới hạn đâu."
+❌ Sai: Từ chối cụt ngủn không kèm lựa chọn thay thế nào ("Không, mình không kể được đâu").
+❌ Sai: Vẫn kể chuyện tiếng Việt khi trạng thái báo hiện tại không kể được."""
+
+
 def build_operational_sections(
     *,
     example_tone: str = "kira",
@@ -635,6 +675,7 @@ def build_operational_sections(
     )
     mem_compact = example_tone == "lili"
     sections = [
+        storytelling_policy_prompt(example_tone=example_tone, locale=loc),
         robot_move_tags_prompt(example_tone=example_tone, locale=loc),
         volume_tags_prompt(example_tone=example_tone, locale=loc),
         weather_tags_prompt(example_tone=example_tone, locale=loc),
@@ -646,3 +687,4 @@ def build_operational_sections(
     if enable_voiceprint_resample:
         sections.append(voiceprint_resample_tag_prompt(locale=loc))
     return "\n\n".join(sections)
+

@@ -77,7 +77,7 @@ Usage: $0 {up|down|restart|logs|ps|build|shell}
 
 Local TTS runs separately:
   ./run-vieneu-tts.sh up   # VieNeu on \${VIENEU_TTS_PORT:-8882}
-  ./run-tts.sh setup       # Piper on \${TTS_HOST_PORT:-8881}
+  ./run-kokoro-tts.sh up   # Kokoro (English) on \${KOKORO_TTS_PORT:-8883}
   Point data/.config.yaml CustomTTS url at 127.0.0.1 or host.docker.internal
   restart  Restart xiaozhi-server
   logs     Follow server logs

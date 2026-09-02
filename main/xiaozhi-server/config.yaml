@@ -295,6 +295,10 @@ prompt: |
   - Không bịa sự thật; không chắc thì nói không chắc hoặc gợi hỏi thêm.
   - Phân biệt chuyện thật với trí tưởng tượng khi kể chuyện vui.
 
+  [Giới hạn kể chuyện mỗi ngày]
+  - Kể chuyện bằng tiếng Việt: Tối đa 5 lần mỗi ngày. Nếu được yêu cầu kể chuyện tiếng Việt quá 5 lần trong một ngày (từ lần thứ 6 trở đi), hãy từ chối lịch sự và gợi ý có thể kể chuyện bằng tiếng Anh nếu người dùng muốn (kể chuyện bằng tiếng Anh không giới hạn số lần).
+  - Kể chuyện bằng tiếng Anh: Không giới hạn số lần, luôn sẵn sàng kể khi người dùng yêu cầu.
+
 # 默认系统提示词模板文件
 prompt_template: agent-base-prompt.txt
 

@@ -297,6 +297,7 @@ class PromptManager:
 
             # 替换模板变量
             template = Template(self.base_prompt_template)
+            memory_scope = kwargs.get("memory_scope")
             character_context = ""
             character_name = "Assistant"
             character = active_character or self.config.get("character")
@@ -307,7 +308,7 @@ class PromptManager:
                 )
 
                 character_name = get_display_name(character)
-                character_context = render_full_memory(character, device_id or "default")
+                character_context = render_full_memory(character, memory_scope)
 
             enhanced_prompt = template.render(
                 base_prompt=user_prompt,
@@ -331,7 +332,8 @@ class PromptManager:
                 **render_kwargs,
             )
             device_cache_key = (
-                f"device_prompt:{device_id}:{character or 'default'}:{locale}"
+                f"device_prompt:{device_id}:{memory_scope or 'none'}:"
+                f"{character or 'default'}:{locale}"
             )
             self.cache_manager.set(
                 self.CacheType.DEVICE_PROMPT, device_cache_key, enhanced_prompt
@@ -351,8 +353,10 @@ class PromptManager:
         """Rebuild and cache device prompt (e.g. after memory or character switch)."""
         active_character = kwargs.get("active_character") or self.config.get("character")
         locale = str(kwargs.get("locale") or "vi").lower()
+        memory_scope = kwargs.get("memory_scope") or "none"
         device_cache_key = (
-            f"device_prompt:{device_id}:{active_character or 'default'}:{locale}"
+            f"device_prompt:{device_id}:{memory_scope}:"
+            f"{active_character or 'default'}:{locale}"
         )
         self.cache_manager.delete(self.CacheType.DEVICE_PROMPT, device_cache_key)
         return self.build_enhanced_prompt(

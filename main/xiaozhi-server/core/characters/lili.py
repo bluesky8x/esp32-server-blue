@@ -145,7 +145,7 @@ __all__ = [
 ]
 
 
-def render_full_memory(device_id: str) -> str:
+def render_full_memory(scope: str | None) -> str:
     from core.characters.character_memory import render_full_memory as _render
 
-    return _render("lili", device_id)
+    return _render("lili", scope)

@@ -5,7 +5,7 @@
 #
 # Local TTS runs in a separate stack (configure url in data/.config.yaml):
 #   ./run-vieneu-tts.sh up    # VieNeu on :8882
-#   ./run-tts.sh setup        # Piper on :8881
+#   ./run-kokoro-tts.sh up    # Kokoro (English) on :8883
 #
 # Edit main/xiaozhi-server/data/.config.yaml before first run:
 #   server.websocket: ws://<ubuntu-lan-ip>:8000/xiaozhi/v1/

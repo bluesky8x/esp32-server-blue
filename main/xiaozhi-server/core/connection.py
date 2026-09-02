@@ -765,6 +765,7 @@ class ConnectionHandler:
             active_character=self.active_character,
             emoji_enabled=(self.features or {}).get("emoji", True),
             locale=getattr(self, "active_locale", "vi"),
+            memory_scope=self._memory_scope(),
         )
         if enhanced_prompt:
             self.change_system_prompt(enhanced_prompt)
@@ -2662,8 +2663,9 @@ class ConnectionHandler:
         character = get_active_character(self)
         if not character:
             return
+        scope = self._memory_scope()
         get_store(character).prepare_turn(
-            self.device_id or "default",
+            scope,
             user_text or "",
             auto_extract=self._character_memory_auto_extract(),
         )
@@ -2678,6 +2680,7 @@ class ConnectionHandler:
             active_character=character,
             emoji_enabled=(self.features or {}).get("emoji", True),
             locale=getattr(self, "active_locale", "vi"),
+            memory_scope=scope,
         )
         if enhanced:
             self.change_system_prompt(enhanced)
@@ -2686,6 +2689,12 @@ class ConnectionHandler:
         self.prompt = prompt
         # 更新系统prompt至上下文
         self.dialogue.update_system_message(self.prompt)
+
+    def _memory_scope(self) -> str | None:
+        """Per-user memory scope for the current speaker (None = ephemeral)."""
+        from core.characters.character_memory import resolve_memory_scope
+
+        return resolve_memory_scope(getattr(self, "current_speaker", None))
 
     def _dialogue_bucket(self) -> str | None:
         """Bucket key for the current speaker. None = don't segment (voiceprint off)."""
@@ -2736,17 +2745,32 @@ class ConnectionHandler:
                 f"[dialogue] loaded persisted context for {bucket!r} ({len(pairs)} msgs)"
             )
 
+    def _live_dialogue_pairs(self) -> list[tuple[str, str]]:
+        """Current live conversation (system + few-shot excluded) for the active speaker."""
+        return [
+            (m.role, m.content)
+            for m in self.dialogue.dialogue
+            if m.role != "system" and not m.is_temporary and m.content
+        ]
+
     def _schedule_user_context_save(self, bucket: str) -> None:
         """Async-save a speaker's conversation if it hasn't been saved for >2 min."""
-        if bucket == _UNKNOWN_DIALOGUE_BUCKET:
+        if not bucket or bucket == _UNKNOWN_DIALOGUE_BUCKET:
             # Unrecognized voices are ephemeral — never save context for them.
             return
         if not hasattr(self, "_user_context_last_saved"):
             self._user_context_last_saved = {}
-        if not hasattr(self, "_user_dialogues"):
-            return
-        msgs = self._user_dialogues.get(bucket) or []
-        pairs = [(m.role, m.content) for m in msgs if m.content]
+        if bucket == getattr(self, "_active_dialogue_user", None):
+            # Active speaker → persist the LIVE dialogue, not the stale loaded snapshot.
+            pairs = self._live_dialogue_pairs()
+        else:
+            if not hasattr(self, "_user_dialogues"):
+                return
+            pairs = [
+                (m.role, m.content)
+                for m in (self._user_dialogues.get(bucket) or [])
+                if m.content
+            ]
         if not pairs:
             return
         now = time.time()
@@ -2766,6 +2790,28 @@ class ConnectionHandler:
             if logger:
                 logger.bind(tag=TAG).warning(
                     f"[dialogue] context save spawn failed: {exc}"
+                )
+
+    def _flush_user_context(self, bucket: str) -> None:
+        """Immediately persist a speaker's LIVE dialogue (used on connection close)."""
+        if not bucket or bucket == _UNKNOWN_DIALOGUE_BUCKET:
+            return
+        pairs = self._live_dialogue_pairs()
+        if not pairs:
+            return
+        character = self._active_character_name()
+        try:
+            from core.utils.user_context_store import save_context
+
+            def _worker():
+                save_context(character, bucket, pairs)
+
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception as exc:
+            logger = getattr(self, "logger", None)
+            if logger:
+                logger.bind(tag=TAG).warning(
+                    f"[dialogue] context flush failed: {exc}"
                 )
 
     def _switch_dialogue_for_speaker(self) -> None:
@@ -3238,12 +3284,19 @@ class ConnectionHandler:
                     )
                 )
                 get_store(character).after_turn(
-                    self.device_id or "default",
+                    self._memory_scope(),
                     query,
                     assistant,
                     rude=rude,
                     auto_extract=self._character_memory_auto_extract(),
+                    speaker_name=(self.current_speaker or "").strip() or None,
                 )
+
+            # Persist the active speaker's LIVE dialogue so a long solo session
+            # isn't lost if it ends without another speaker switching in.
+            active_user = getattr(self, "_active_dialogue_user", None)
+            if active_user:
+                self._schedule_user_context_save(active_user)
 
             self._maybe_dispatch_volume_stt_fallback(label="chat_end")
             self._maybe_dispatch_tof_stt_fallback(label="chat_end")
@@ -3433,6 +3486,15 @@ class ConnectionHandler:
     async def close(self, ws=None):
         """资源清理方法"""
         self._clear_wx_followup(reason="connection close")
+
+        # Persist the active speaker's conversation so closing never loses the tail.
+        try:
+            active_user = getattr(self, "_active_dialogue_user", None)
+            if active_user:
+                self._flush_user_context(active_user)
+        except Exception:
+            pass
+
         try:
             # 清理 VAD 连接资源
             if (

@@ -11,6 +11,32 @@ from typing import Any
 
 from core.characters.character_render import render_static_memory
 
+# Per-user memory scoping — memory is keyed by the recognized speaker (mirrors the
+# per-user dialogue folders), NOT by device id. Device-level memory is gone.
+_UNKNOWN_SPEAKERS = frozenset({"未知说话人", "未知", "unknown", "__unknown__"})
+_SCOPE_CLEAN_RE = re.compile(r"[^\w\u00C0-\u1EF9]+", re.UNICODE)
+
+
+def sanitize_memory_scope(name: str) -> str:
+    """Folder-safe per-user scope (same shape as the per-user dialogue folders)."""
+    s = _SCOPE_CLEAN_RE.sub("_", (name or "").strip()).strip("_")
+    return (s[:40] or "unknown")
+
+
+def resolve_memory_scope(speaker: str | None) -> str | None:
+    """Map the current speaker to a persistent per-user memory scope.
+
+    - Recognized speaker display name -> that user's scope (per-user memory).
+    - 未知说话人 / unknown marker -> None (ephemeral: nothing loaded/saved).
+    - Empty speaker (voiceprint off / legacy single-user) -> "default".
+    """
+    spk = (speaker or "").strip()
+    if not spk:
+        return "default"
+    if spk.lower() in _UNKNOWN_SPEAKERS:
+        return None
+    return sanitize_memory_scope(spk)
+
 _EPHEMERAL_RE = re.compile(
     r"\b(thời tiết|weather|hôm nay mấy độ|forecast|"
     r"hỏi python|how to|làm sao để|what is|tell me about)\b",
@@ -128,6 +154,15 @@ def render_dynamic_memory(state: CharacterMemoryState) -> str:
     if r.inside_jokes:
         lines.append(f"Inside jokes / nicknames: {', '.join(r.inside_jokes)}")
     lines.append(f"Tone hint: {_friendliness_tone(r.friendliness)}")
+
+    # Daily Storytelling Tracker from data/voice_users.json (per-speaker, single source).
+    try:
+        from core.utils.voice_user_store import get_voice_user_store
+        story_section = get_voice_user_store().render_story_status()
+        lines.extend(["", story_section])
+    except Exception:
+        pass
+
     lines.append("")
     lines.append(
         "Use this memory naturally. Greet by name when known. "
@@ -137,8 +172,8 @@ def render_dynamic_memory(state: CharacterMemoryState) -> str:
     return "\n".join(lines)
 
 
-def render_full_memory(character_id: str, device_id: str) -> str:
-    state = CharacterMemoryStore(character_id).load(device_id)
+def render_full_memory(character_id: str, scope: str | None) -> str:
+    state = CharacterMemoryStore(character_id).load(scope)
     return f"{render_static_memory(character_id)}\n\n{render_dynamic_memory(state)}"
 
 
@@ -150,54 +185,87 @@ def _friendliness_tone(level: int) -> str:
     return "close friend — relaxed, caring, can reference shared history"
 
 
+_STORY_REQUEST_RE = re.compile(
+    r"\b(kể\b.*?\b(chuyện|truyện|cổ tích)|muốn\s*nghe\s*(kể\s*)?(chuyện|truyện)|tell\b.*?\bstory|story\s*about|bedtime\s*story)\b",
+    re.I,
+)
+_REFUSAL_LIMIT_RE = re.compile(
+    r"(đã kể đủ 5|quá 5 lần|giới hạn 5 lần|already told 5|limit of 5 stories"
+    r"|story\s*:\s*(?:no|refuse))",
+    re.I,
+)
+_EN_STORY_RE = re.compile(
+    r"\b(tiếng\s*anh|english|tell\b.*?\bstory)\b",
+    re.I,
+)
+
+
+def _check_and_record_story(
+    state: CharacterMemoryState,
+    user_text: str,
+    assistant_text: str,
+    speaker_name: str | None = None,
+) -> bool:
+    """Detect if assistant told a story this turn and record it to voice_users.json (per-speaker).
+
+    Story counting is per-speaker in data/voice_users.json only; character-memory
+    files (per device) do NOT track story counts.
+    """
+    u = (user_text or "").strip()
+    a = (assistant_text or "").strip()
+    if not u or not a:
+        return False
+    if _STORY_REQUEST_RE.search(u):
+        if _REFUSAL_LIMIT_RE.search(a):
+            return False
+        if len(a) >= 25:
+            is_en = bool(_EN_STORY_RE.search(u))
+            try:
+                from core.utils.voice_user_store import get_voice_user_store
+                get_voice_user_store().record_story(is_english=is_en, speaker=speaker_name)
+            except Exception:
+                pass
+            return True
+    return False
+
+
 class CharacterMemoryStore:
     def __init__(self, character_id: str):
         self.character_id = character_id.lower()
         self.data_dir = os.path.join("data", self.character_id, "users")
         os.makedirs(self.data_dir, exist_ok=True)
 
-    def _path(self, device_id: str) -> str:
-        safe = re.sub(r"[^\w\-]", "_", device_id or "default")
-        return os.path.join(self.data_dir, f"{safe}.json")
+    def _path(self, scope: str | None) -> str | None:
+        """Per-user memory file: data/<character>/users/<scope>/memory.json.
 
-    def load(self, device_id: str) -> CharacterMemoryState:
-        path = self._path(device_id)
-        if not os.path.exists(path):
-            return self._migrate_legacy(device_id)
+        scope=None (unknown speaker) -> no persistent file (ephemeral memory).
+        """
+        if not scope:
+            return None
+        safe = sanitize_memory_scope(scope)
+        return os.path.join(self.data_dir, safe, "memory.json")
+
+    def load(self, scope: str | None) -> CharacterMemoryState:
+        path = self._path(scope)
+        if not path or not os.path.exists(path):
+            return CharacterMemoryState()
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            return CharacterMemoryState(
+            state = CharacterMemoryState(
                 user=UserMemory.from_dict(data.get("user")),
                 relationship=RelationshipMemory.from_dict(data.get("relationship")),
                 turn_count=int(data.get("turn_count") or 0),
             )
+            return state
         except (json.JSONDecodeError, OSError, TypeError, ValueError):
             return CharacterMemoryState()
 
-    def _migrate_legacy(self, device_id: str) -> CharacterMemoryState:
-        if self.character_id != "kira":
-            return CharacterMemoryState()
-        legacy_name = re.sub(r"[^\w\-]", "_", device_id or "default")
-        legacy = os.path.join("data", "kira", f"{legacy_name}.json")
-        if not os.path.exists(legacy):
-            return CharacterMemoryState()
-        try:
-            with open(legacy, encoding="utf-8") as f:
-                old = json.load(f)
-            state = CharacterMemoryState(
-                relationship=RelationshipMemory(friendliness=int(old.get("friendship") or 0)),
-                turn_count=int(old.get("turn_count") or 0),
-            )
-            for fact in old.get("facts") or []:
-                _apply_legacy_fact(state, str(fact))
-            self.save(device_id, state)
-            return state
-        except (json.JSONDecodeError, OSError):
-            return CharacterMemoryState()
-
-    def save(self, device_id: str, state: CharacterMemoryState) -> None:
-        path = self._path(device_id)
+    def save(self, scope: str | None, state: CharacterMemoryState) -> None:
+        path = self._path(scope)
+        if not path:
+            return
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(
                 {
@@ -211,35 +279,41 @@ class CharacterMemoryStore:
             )
 
     def prepare_turn(
-        self, device_id: str, user_text: str, *, auto_extract: bool = False
+        self, scope: str | None, user_text: str, *, auto_extract: bool = False
     ) -> CharacterMemoryState:
-        state = self.load(device_id)
+        state = self.load(scope)
         if auto_extract and user_text and not _EPHEMERAL_RE.search(user_text):
             extract_stable_facts(state, user_text, self.character_id)
-            self.save(device_id, state)
+            self.save(scope, state)
         return state
 
     def apply_mem_tags(
-        self, device_id: str, tags: list[tuple[str, str]]
+        self,
+        scope: str | None,
+        tags: list[tuple[str, str]],
+        speaker_name: str | None = None,
     ) -> bool:
         if not tags:
             return False
-        state = self.load(device_id)
-        if not apply_memory_tag_entries(state, tags, self.character_id):
+        state = self.load(scope)
+        if not apply_memory_tag_entries(
+            state, tags, self.character_id, speaker_name=speaker_name
+        ):
             return False
-        self.save(device_id, state)
+        self.save(scope, state)
         return True
 
     def after_turn(
         self,
-        device_id: str,
+        scope: str | None,
         user_text: str,
         assistant_text: str,
         *,
         rude: bool = False,
         auto_extract: bool = False,
+        speaker_name: str | None = None,
     ) -> CharacterMemoryState:
-        state = self.load(device_id)
+        state = self.load(scope)
         state.turn_count += 1
         if not state.relationship.first_met:
             state.relationship.first_met = date.today().isoformat()
@@ -247,9 +321,10 @@ class CharacterMemoryStore:
             state.relationship.friendliness = max(0, state.relationship.friendliness - 5)
         else:
             state.relationship.friendliness = min(100, state.relationship.friendliness + 2)
+        _check_and_record_story(state, user_text, assistant_text, speaker_name=speaker_name)
         if auto_extract and user_text and not _EPHEMERAL_RE.search(user_text):
             extract_stable_facts(state, user_text, self.character_id)
-        self.save(device_id, state)
+        self.save(scope, state)
         return state
 
 
@@ -395,6 +470,7 @@ def apply_memory_tag_entries(
     state: CharacterMemoryState,
     tags: list[tuple[str, str]],
     character_id: str = "kira",
+    speaker_name: str | None = None,
 ) -> bool:
     """Apply mem:category:value pairs from LLM reply tags. Returns True if state changed."""
     changed = False
@@ -459,6 +535,16 @@ def apply_memory_tag_entries(
                 if state.user.favorite_language != "Vietnamese":
                     state.user.favorite_language = "Vietnamese"
                     changed = True
+        elif cat == "story":
+            low = value.lower()
+            is_en = bool("en" in low or "english" in low)
+            try:
+                from core.utils.voice_user_store import get_voice_user_store
+                get_voice_user_store().record_story(
+                    is_english=is_en, speaker=speaker_name
+                )
+            except Exception:
+                pass
     return changed
 
 

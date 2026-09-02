@@ -135,10 +135,10 @@ def get_store() -> CharacterMemoryStore:
     return CharacterMemoryStore("kira")
 
 
-def render_full_memory(device_id: str) -> str:
+def render_full_memory(scope: str | None) -> str:
     from core.characters.character_memory import render_full_memory as _render
 
-    return _render("kira", device_id)
+    return _render("kira", scope)
 
 
 __all__ = [

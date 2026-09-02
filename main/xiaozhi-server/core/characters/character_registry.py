@@ -84,11 +84,11 @@ def get_store(character: str):
     return CharacterMemoryStore(character)
 
 
-def render_full_memory(character: str, device_id: str) -> str:
+def render_full_memory(character: str, scope: str | None) -> str:
     from core.characters.character_memory import render_full_memory as _render
 
     character = resolve_character_id(character) or character.lower()
-    return _render(character, device_id)
+    return _render(character, scope)
 
 
 def plan_behaviors(character: str, user_text: str, emotion: str | None = None) -> list[str]:

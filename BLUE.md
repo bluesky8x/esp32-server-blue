@@ -42,8 +42,8 @@ Optional local TTS (separate Docker stack — configure url in `data/.config.yam
 ./run-vieneu-tts.sh up
 ./run-vieneu-tts.sh test
 
-# Piper (vi/en, fast setup):
-./run-tts.sh setup
+# Kokoro-82M (best English on CPU):
+./run-kokoro-tts.sh up
 ```
 
 See [Local TTS](#local-tts-separate-docker-stack) for `data/.config.yaml` snippets.
@@ -70,7 +70,7 @@ Apple Silicon and other Macs can follow the steps below (same commands; Intel do
 | Python **3.10.19** | Yes | Via **pyenv** (see `.python-version`) |
 | ffmpeg | Yes | Checked at startup (`app.py`) |
 | libopus | Yes | Used by `opuslib_next` for ESP32 audio |
-| Docker Desktop | Optional | Local Piper TTS via `./run-tts.sh` |
+| Docker Desktop | Optional | Local VieNeu/Kokoro TTS via `./run-vieneu-tts.sh` / `./run-kokoro-tts.sh` |
 | FunASR model | Optional | Only if `selected_module.ASR: FunASR` |
 | **ESP-IDF 6.0.2** | For firmware | Build/flash [esp32-blue](../esp32-blue/) (separate Python env) |
 
@@ -181,17 +181,17 @@ curl -L -o models/SenseVoiceSmall/model.pt \
 
 Set `selected_module.ASR: FunASR` in `data/.config.yaml`.
 
-### 8. Optional — Docker (local Piper TTS)
+### 8. Optional — Docker (local TTS)
 
 For low-latency TTS instead of Edge TTS:
 
 ```bash
 # Install Docker Desktop for Mac, then from repo root:
-chmod +x run-tts.sh
-./run-tts.sh setup
+./run-vieneu-tts.sh up    # Vietnamese (VieNeu) on :8882
+./run-kokoro-tts.sh up    # English (Kokoro) on :8883
 ```
 
-See [Local TTS (Piper / Speaches)](#local-tts-piper--speaches--low-latency) for `data/.config.yaml` changes.
+See [Local TTS](#local-tts-separate-docker-stack) for `data/.config.yaml` changes.
 
 ### 9. Optional — digital human (browser client)
 
@@ -482,7 +482,6 @@ TTS runs in its own Compose project (`docker/tts/docker-compose.yml`), independe
 | Engine | Script | Port | Use case |
 |--------|--------|------|----------|
 | VieNeu v3 Turbo | `./run-vieneu-tts.sh up` | 8882 | Best Vietnamese quality (CPU/ONNX) |
-| Piper / Speaches | `./run-tts.sh setup` | 8881 | Fast vi/en, smaller download |
 | Kokoro-82M | `./run-kokoro-tts.sh up` | 8883 | Best English quality on CPU (female US voices) |
 
 Optional env: `cp docker/tts/.env.example docker/tts/.env`
@@ -491,72 +490,9 @@ Optional env: `cp docker/tts/.env.example docker/tts/.env`
 
 **Server in Docker** (`./run-docker.sh up`): use `http://host.docker.internal:<port>/v1/audio/speech`
 
-### Piper / Speaches (low latency)
-
-Run Piper voices via [Speaches](https://speaches.ai/) Docker (OpenAI-compatible API). No Edge TTS cloud hop → typically **~0.3–1 s** synthesis from Vietnam.
-
-#### 1. Start TTS container + download models
-
-From repo root:
-
-```bash
-chmod +x run-tts.sh
-./run-tts.sh setup    # pull image, start on :8881, download vi + en Piper models
-./run-tts.sh test     # writes /tmp/blue-tts-vi.wav and /tmp/blue-tts-en.wav
-```
-
-| Model | HuggingFace ID |
-|-------|----------------|
-| Vietnamese | `speaches-ai/piper-vi_VN-25hours_single-low` |
-| English | `speaches-ai/piper-en_US-lessac-medium` |
-
-Override with env: `TTS_VI_MODEL`, `TTS_EN_MODEL`, `TTS_HOST_PORT` (default `8881`).
-
-#### 2. Point xiaozhi-server at local TTS
-
-In `main/xiaozhi-server/data/.config.yaml`:
-
-```yaml
-selected_module:
-  TTS: CustomTTS
-
-language_runtime:
-  default_locale: vi
-  locales:
-    vi:
-      tts_voice: speaches-ai/piper-vi_VN-25hours_single-low
-      tts_speeches_voice: 25hours_single
-    en:
-      tts_voice: speaches-ai/piper-en_US-lessac-medium
-      tts_speeches_voice: lessac
-
-TTS:
-  CustomTTS:
-    type: custom
-    method: POST
-    url: "http://127.0.0.1:8881/v1/audio/speech"
-    default_voice: default
-    format: wav
-    output_dir: tmp/
-    params:
-      input: "{prompt_text}"
-      model: "{model}"
-      voice: "{voice}"
-      response_format: "wav"
-      speed: 1.0
-```
-
-`language_runtime` sets `{model}` per locale; `{voice}` is usually `default` for single-speaker Piper models.
-
-#### 3. Restart server
-
-```bash
-./run.sh
-```
-
 ### VieNeu-TTS (higher quality Vietnamese)
 
-[VieNeu-TTS v3 Turbo](https://github.com/pnnbao97/VieNeu-TTS) runs **on CPU via ONNX** (no GPU required). Better Vietnamese prosody than Piper; first start downloads models (~few GB).
+[VieNeu-TTS v3 Turbo](https://github.com/pnnbao97/VieNeu-TTS) runs **on CPU via ONNX** (no GPU required). Excellent Vietnamese prosody; first start downloads models (~few GB).
 
 ```bash
 chmod +x run-vieneu-tts.sh
