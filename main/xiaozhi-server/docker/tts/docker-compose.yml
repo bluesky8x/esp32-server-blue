@@ -1,5 +1,0 @@
-# Local Piper TTS — moved to standalone stack.
-# Use from repo root:
-#   ./run-tts.sh setup
-#
-# Compose file: docker/tts/docker-compose.yml (profile: piper)

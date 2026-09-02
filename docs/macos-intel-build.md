@@ -302,19 +302,19 @@ idf.py -p /dev/cu.usbmodem1101 flash monitor
 
 ---
 
-## 10. Optional — Docker Piper TTS (Intel)
+## 10. Optional — Docker local TTS (Intel)
 
 [Docker Desktop for Mac (Intel chip)](https://docs.docker.com/desktop/setup/install/mac-install/) works on x86_64.
 
 ```bash
 cd ~/work/esp32-server-blue
-chmod +x run-tts.sh
-./run-tts.sh setup
+./run-vieneu-tts.sh up    # Vietnamese (VieNeu) on :8882
+./run-kokoro-tts.sh up    # English (Kokoro) on :8883
 ```
 
-In `data/.config.yaml`, set CustomTTS URL to `http://127.0.0.1:8881/v1/audio/speech` (host Docker, not compose network name).
+In `data/.config.yaml`, set CustomTTS URL to `http://127.0.0.1:8882/v1/audio/speech` (vi) and the `en` locale URL to `http://127.0.0.1:8883/v1/audio/speech` (host Docker, not compose network name).
 
-See [BLUE.md § Local TTS](../BLUE.md#local-tts-piper--speaches--low-latency).
+See [BLUE.md § Local TTS](../BLUE.md#local-tts-separate-docker-stack).
 
 ---
 
