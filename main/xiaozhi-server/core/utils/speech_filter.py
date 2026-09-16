@@ -162,7 +162,10 @@ def is_noise_transcript(text: str) -> bool:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    if len(t) <= 2:
+    # Only drop SINGLE characters as noise. 2-letter words can be meaningful
+    # (e.g. "OK" — the ToF-calibration confirmation); real fillers ("um", "oh",
+    # "ừ", "ờ"...) are still caught below by _FILLER_ONLY_RE.
+    if len(t) <= 1:
         return True
 
     for pat in _NOISE_TRANSCRIPT_RES:

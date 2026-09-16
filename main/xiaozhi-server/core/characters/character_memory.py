@@ -122,7 +122,7 @@ class CharacterMemoryState:
     turn_count: int = 0
 
 
-def render_dynamic_memory(state: CharacterMemoryState) -> str:
+def render_dynamic_memory(state: CharacterMemoryState, scope: str | None = None) -> str:
     u = state.user
     r = state.relationship
     lines = ["## User Memory"]
@@ -155,11 +155,15 @@ def render_dynamic_memory(state: CharacterMemoryState) -> str:
         lines.append(f"Inside jokes / nicknames: {', '.join(r.inside_jokes)}")
     lines.append(f"Tone hint: {_friendliness_tone(r.friendliness)}")
 
-    # Daily Storytelling Tracker from data/voice_users.json (per-speaker, single source).
+    # Storytelling status — ONLY this speaker's own scope (never an all-users list):
+    # another user being "not available" must not leak into this user's context and
+    # cause the model to wrongly refuse stories for the current speaker.
     try:
         from core.utils.voice_user_store import get_voice_user_store
-        story_section = get_voice_user_store().render_story_status()
-        lines.extend(["", story_section])
+        if scope:
+            story_section = get_voice_user_store().render_story_status(scope)
+            if story_section:
+                lines.extend(["", story_section])
     except Exception:
         pass
 
@@ -174,7 +178,7 @@ def render_dynamic_memory(state: CharacterMemoryState) -> str:
 
 def render_full_memory(character_id: str, scope: str | None) -> str:
     state = CharacterMemoryStore(character_id).load(scope)
-    return f"{render_static_memory(character_id)}\n\n{render_dynamic_memory(state)}"
+    return f"{render_static_memory(character_id)}\n\n{render_dynamic_memory(state, scope)}"
 
 
 def _friendliness_tone(level: int) -> str:
@@ -190,7 +194,8 @@ _STORY_REQUEST_RE = re.compile(
     re.I,
 )
 _REFUSAL_LIMIT_RE = re.compile(
-    r"(đã kể đủ 5|quá 5 lần|giới hạn 5 lần|already told 5|limit of 5 stories"
+    r"(đã kể đủ\s*\d*|quá\s*\d+\s*lần|giới hạn\s*\d*\s*lần|"
+    r"hết lượt|already told\s*\d*|limit of\s*\d*\s*stor(?:y|ies)"
     r"|story\s*:\s*(?:no|refuse))",
     re.I,
 )

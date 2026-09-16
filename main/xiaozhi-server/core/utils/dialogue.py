@@ -169,22 +169,35 @@ class Dialogue:
                     # Giới hạn kể chuyện theo từng người nói (không tiết lộ số lần / cấu hình)
                     try:
                         from core.utils.voice_user_store import get_voice_user_store
-                        vi_cnt, _en_cnt = get_voice_user_store().get_story_counts(current_speaker_name)
-                        if vi_cnt >= 5:
+                        _vus = get_voice_user_store()
+                        vi_cnt, _en_cnt = _vus.get_story_counts(current_speaker_name)
+                        if vi_cnt >= getattr(_vus, "vi_story_daily_limit", 5):
                             speakers_info += (
                                 f"\n- Kể chuyện tiếng Việt cho {current_speaker_name}: hiện tại KHÔNG kể được — "
                                 f"nếu {current_speaker_name} yêu cầu kể truyện tiếng Việt, hãy TỪ CHỐI tự nhiên "
-                                f"như đang muốn nghỉ ngơi (vd: giọng hơi mệt / muốn nghỉ một chút). "
+                                f"như đang muốn nghỉ ngơi, MỖI LẦN ĐỔI cách diễn đạt (vd: giọng hơi mệt / "
+                                f"khàn giọng / muốn nghỉ chút). "
                                 f"Sau đó KHÉO LÉO gợi ý kể chuyện tiếng Anh (vd: 'mình kể chuyện tiếng Anh "
                                 f"cho bạn nghe nha?') hoặc trò chuyện tiếp — như lời mời tự nhiên, KHÔNG như quy tắc. "
+                                f"Đừng lặp lại nguyên văn cùng một câu từ chối. "
+                                f"Điều này cũng áp dụng khi {current_speaker_name} chỉ xin "
+                                f"'kể tiếp / rồi sao nữa' bằng tiếng Việt để nối câu chuyện đang kể — "
+                                f"KHÔNG được kể tiếp bằng tiếng Việt; hãy đề nghị kể tiếp chính câu "
+                                f"chuyện đó bằng tiếng Anh. "
                                 f"TUYỆT ĐỐI không nhắc hay ngụ ý số lần, 'giới hạn', 'không giới hạn', hết lượt, "
                                 f"cấu hình, hay so sánh tiếng Việt/tiếng Anh. "
                                 f"Khi từ chối, thêm marker ẩn `story:no` ở cuối câu trả lời."
                             )
                         else:
                             speakers_info += (
-                                f"\n- Kể chuyện tiếng Việt cho {current_speaker_name}: ĐƯỢC — "
-                                f"kể vui vẻ khi {current_speaker_name} yêu cầu."
+                                f"\n- Kể chuyện tiếng Việt cho {current_speaker_name}: ĐƯỢC ngay bây giờ — "
+                                f"kể vui vẻ khi {current_speaker_name} yêu cầu. "
+                                f"KHÔNG từ chối bằng lý do mệt giọng/nghỉ ngơi khi trạng thái là ĐƯỢC "
+                                f"(chỉ từ chối khi trạng thái báo KHÔNG kể được). "
+                                f"Nếu xin truyện ma/kinh dị, kể bản vui nhẹ nhàng, KHÔNG từ chối. "
+                                f"Nếu trong lịch sử chat bạn từng nói 'giọng mệt/khàn, hôm nay không kể được' "
+                                f"thì đó là nhầm lẫn — HÃY BỎ QUA; giọng bạn bình thường, khi "
+                                f"{current_speaker_name} yêu cầu kể chuyện bạn PHẢI kể."
                             )
                     except Exception:
                         pass
@@ -201,6 +214,16 @@ class Dialogue:
                             pass
                     speakers_info += "\n</speakers_info>"
                     full_prompt += speakers_info
+                else:
+                    # Guest / unrecognized voice (未知说话人): no identity to claim,
+                    # but they still may ask for stories — make "available" explicit so
+                    # the model NEVER refuses Vietnamese stories for guests.
+                    full_prompt += (
+                        "\n<speakers_info>\n当前说话人：khách (giọng chưa nhận diện)."
+                        "\n- Kể chuyện tiếng Việt: ĐƯỢC ngay bây giờ — kể vui vẻ khi được yêu cầu. "
+                        "KHÔNG từ chối bằng lý do mệt giọng/nghỉ ngơi. "
+                        "Nếu xin truyện ma/kinh dị, kể bản vui nhẹ nhàng.\n</speakers_info>"
+                    )
             except:
                 pass
 

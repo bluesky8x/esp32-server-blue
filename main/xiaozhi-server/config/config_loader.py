@@ -53,7 +53,12 @@ async def load_config():
         char = resolve_character_id(config.get("character"))
         if char:
             config["character"] = char
-            config["prompt"] = get_operational_prompt(char)
+            config["prompt"] = get_operational_prompt(
+                char,
+                enable_children_games=bool(
+                    (config.get("children_games") or {}).get("enabled", False)
+                ),
+            )
 
     # 缓存配置
     cache_manager.set(CacheType.CONFIG, "main_config", config)

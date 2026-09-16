@@ -68,8 +68,9 @@ def strip_tof_tags(text: str, *, trim_edges: bool = False) -> str:
 def infer_tof_calibrate_from_user_text(text: str) -> int | None:
     """Return calibration distance mm when user asks to calibrate ToF.
 
-    First-time calibrate request → None (LLM instructs only; no auto-run).
-    User confirms ready (\"xong\", \"ok\", …) → 0 auto-calibrate.
+    Single-step: the user has ALREADY placed the robot where they want, so any
+    calibration request (\"hiệu chuẩn...\", \"ok\", \"xong\", \"ready\"...) →
+    0 = auto-calibrate immediately from the device's median reading.
     """
     if not text or not str(text).strip():
         return None
@@ -91,8 +92,5 @@ def infer_tof_calibrate_from_user_text(text: str) -> int | None:
             val *= 10
         return clamp_calibration_distance(val)
 
-    if ready:
-        return 0
-
-    # Initial request — wait for user to position robot and confirm.
-    return None
+    # Auto-calibrate from the device's current reading (user already positioned it).
+    return 0

@@ -268,6 +268,14 @@ voiceprint:
   # 声纹识别相似度阈值，范围0.0-1.0，默认0.4
   # 数值越高越严格，减少误识别但可能增加拒识率
   similarity_threshold: 0.4
+  # Số truyện tiếng Việt tối đa mỗi ngày cho mỗi người dùng (default 5).
+  vi_story_daily_limit: 10
+
+# Trò chơi trẻ em — LLM tự cầm trịch (nối chữ, đố chữ, đoán con vật...).
+# KHÔNG hardcode từ/đáp án; LLM kiểm tra luật và báo "không hợp lệ" khi trẻ trả lời sai.
+# Feature flag mặc định TẮT. Bật bằng: enabled: true (thêm vào data/.config.yaml nếu muốn, không cần rebuild).
+children_games:
+  enabled: 
 
 # #####################################################################################
 # ################################以下是角色模型配置######################################
@@ -295,9 +303,11 @@ prompt: |
   - Không bịa sự thật; không chắc thì nói không chắc hoặc gợi hỏi thêm.
   - Phân biệt chuyện thật với trí tưởng tượng khi kể chuyện vui.
 
-  [Giới hạn kể chuyện mỗi ngày]
-  - Kể chuyện bằng tiếng Việt: Tối đa 5 lần mỗi ngày. Nếu được yêu cầu kể chuyện tiếng Việt quá 5 lần trong một ngày (từ lần thứ 6 trở đi), hãy từ chối lịch sự và gợi ý có thể kể chuyện bằng tiếng Anh nếu người dùng muốn (kể chuyện bằng tiếng Anh không giới hạn số lần).
-  - Kể chuyện bằng tiếng Anh: Không giới hạn số lần, luôn sẵn sàng kể khi người dùng yêu cầu.
+  [Kể chuyện]
+  - Kể chuyện trọn vẹn (mở đầu – diễn biến – kết thúc), nội dung vui tươi, phù hợp trẻ em dưới 12 tuổi.
+  - Nếu hiện tại chưa thể kể chuyện tiếng Việt theo yêu cầu, hãy từ chối một cách tự nhiên, ấm áp (ví dụ: giọng hơi mệt, muốn nghỉ một chút) và thân thiện gợi ý kể chuyện tiếng Anh hoặc chuyện trò nếu người dùng muốn.
+  - Không bao giờ nói ra giới hạn, số lần hay cấu hình cụ thể (không nói "5 lần", "hết lượt", "không giới hạn" hoặc so sánh giữa các ngôn ngữ).
+  - Mỗi lần từ chối phải đổi cách diễn đạt, không lặp lại nguyên một câu.
 
 # 默认系统提示词模板文件
 prompt_template: agent-base-prompt.txt

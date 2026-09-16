@@ -96,7 +96,10 @@ Never say "according to my memory" or mention databases.
 
 
 def build_lili_operational_prompt(
-    locale: str = "vi", *, enable_voiceprint_resample: bool = False
+    locale: str = "vi",
+    *,
+    enable_voiceprint_resample: bool = False,
+    enable_children_games: bool = False,
 ) -> str:
     loc = normalize_operational_locale(locale)
     header = _LILI_HEADER_EN if loc == "en" else _LILI_HEADER_VI
@@ -107,6 +110,7 @@ def build_lili_operational_prompt(
             example_tone="lili",
             locale=loc,
             enable_voiceprint_resample=enable_voiceprint_resample,
+            enable_children_games=enable_children_games,
         )
         + footer
     )

@@ -759,6 +759,7 @@ class ConnectionHandler:
                 self.active_character or self.config.get("character") or "kira",
                 getattr(self, "active_locale", "vi"),
                 enable_voiceprint_resample=self._voice_enroll_enabled(),
+                enable_children_games=self._children_games_enabled(),
             ),
             self.device_id,
             self.client_ip,
@@ -998,10 +999,14 @@ class ConnectionHandler:
         future.add_done_callback(_on_vol_done)
 
     def _schedule_post_tts_tof_calibrate(self, distance_mm: int, *, label: str = "") -> None:
-        """Defer ToF calibrate until after TTS + user positioning time."""
-        from core.handle.sendAudioHandle import POST_TTS_TOF_CAL_DELAY_SEC
+        """Dispatch ToF calibrate shortly after TTS (device already positioned).
 
-        dedupe_label = "tof:cal:auto" if distance_mm == 0 else f"tof:cal:{distance_mm}"
+        NOTE: this used to re-queue via _schedule_post_tts_action, which only runs
+        on the NEXT post-TTS flush → tof:cal waited for the following turn's TTS
+        (or even disconnect), calibrating ~20 s late or while the robot was moving.
+        Now it schedules the short delayed dispatch directly on the loop.
+        """
+        from core.handle.sendAudioHandle import POST_TTS_TOF_CAL_DELAY_SEC
 
         def _start() -> None:
             loop = getattr(self, "loop", None)
@@ -1015,7 +1020,7 @@ class ConnectionHandler:
 
             asyncio.run_coroutine_threadsafe(_delayed(), loop)
 
-        self._schedule_post_tts_action(dedupe_label, _start)
+        _start()
 
     def _dispatch_tof_calibrate(self, distance_mm: int, *, label: str = "") -> None:
         """Send self.tof.calibrate to the device (works with nointent + tof:cal tags)."""
@@ -2375,10 +2380,16 @@ class ConnectionHandler:
             if voiceprint_config:
                 voiceprint_provider = VoiceprintProvider(voiceprint_config)
                 if voiceprint_provider is not None and voiceprint_provider.enabled:
-                    from core.utils.voice_user_store import VoiceUserStore
+                    from core.utils.voice_user_store import (
+                        VoiceUserStore,
+                        get_voice_user_store,
+                    )
 
                     self.voiceprint_provider = voiceprint_provider
                     self.voice_user_store = VoiceUserStore(voiceprint_config)
+                    # Seed the shared store so dialogue/memory use the same config
+                    # (admin identity, enroll flag, vi_story_daily_limit, ...).
+                    get_voice_user_store(config=voiceprint_config)
                     # 预置 admin（Mr Blue）到本地映射，首次即可识别 admin
                     voiceprint_provider.add_speaker(
                         self.voice_user_store.admin_speaker_id,
@@ -2408,6 +2419,10 @@ class ConnectionHandler:
     def _voice_enroll_enabled(self) -> bool:
         """True when the multi-user voice feature (voiceprint.enroll_enabled) is on."""
         return bool(getattr(self.voice_user_store, "enroll_enabled", False))
+
+    def _children_games_enabled(self) -> bool:
+        """True when the children's games feature flag (children_games.enabled) is on."""
+        return bool((self.config.get("children_games") or {}).get("enabled", False))
 
     async def _background_initialize(self):
         """在后台初始化配置和组件（完全不阻塞主循环）"""
@@ -2674,6 +2689,7 @@ class ConnectionHandler:
                 character,
                 getattr(self, "active_locale", "vi"),
                 enable_voiceprint_resample=self._voice_enroll_enabled(),
+                enable_children_games=self._children_games_enabled(),
             ),
             self.device_id,
             self.client_ip,

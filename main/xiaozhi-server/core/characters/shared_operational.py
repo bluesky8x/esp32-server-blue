@@ -310,61 +310,39 @@ When the user asks to change volume / make it louder / quieter, append **`vol:<0
 def tof_calibrate_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") -> str:
     loc = normalize_operational_locale(locale)
     if loc == "en":
-        if example_tone == "lili":
-            example = (
-                '✅ Step 1: *"Place the robot on open floor, say ok when ready"* — **no tag**'
-                '\n✅ Step 2: *"Calibrating from sensor reading tof:cal"*'
-            )
-        else:
-            example = (
-                '✅ Step 1: *"Place the robot on open floor and say ok when ready"* — **no tag**'
-                '\n✅ Step 2: *"Hold still — calibrating now tof:cal"*'
-            )
         return f"""## ToF distance sensor calibration (Blue robot body)
 Low-mounted **VL53L0X**. **`tof:cal`** tells the robot to calibrate from **its current reading** (no fixed mm from server).
 
-**Two-step flow (required):**
-1. **First reply** — instruct: open floor ahead, hold still. **Do NOT append `tof:cal` yet.**
-2. **When user confirms** (ok / xong / đặt xong) — brief reply + **`tof:cal`** at the very end.
+**Single-step flow (one step only):**
+The user ALREADY placed the robot where they want (open floor ahead, stable) before asking. When they ask to calibrate ("calibrate the distance sensor", "hiệu chuẩn", "ok", "xong"...), reply briefly that you are calibrating / it is done and append **`tof:cal`** at the very end of THAT SAME reply. Do NOT ask them to place the robot or say "ok" first.
 
 | When | Tag |
 |------|-----|
-| User confirms ready | `tof:cal` (device auto — median reading) |
+| User requests calibration (any wording) | `tof:cal` (device auto — median reading) |
 | Rare: fixed target | `tof:cal:<mm>` only if user measured exact distance |
 
-Calibration runs **~10 s after your TTS** so the user can position the robot.
+Calibration runs shortly after your TTS (the device reads its own sensor) — no extra placement step.
 
-{example}
-❌ Bad: *instruction + `tof:cal` in the same first reply*
-❌ Bad: confirming calibration **without** the tag"""
+✅ *"OK, calibrating the distance sensor now tof:cal"*
+❌ Bad: asking the user to place the robot / say "ok" first instead of calibrating now
+❌ Bad: a calibration request answered **without** the `tof:cal` tag"""
 
-    if example_tone == "lili":
-        example = (
-            '✅ Bước 1: *"Đặt robot sàn trống phía trước, xong nói ok nha"* — **chưa tag**'
-            '\n✅ Bước 2: *"Mình hiệu chuẩn theo cảm biến nha tof:cal"*'
-        )
-    else:
-        example = (
-            '✅ Bước 1: *"Dạ, đặt robot trên bàn sàn trống, xong nói ok nha"* — **chưa tag**'
-            '\n✅ Bước 2: *"Dạ, mình hiệu chuẩn nha tof:cal"*'
-        )
     return f"""## ToF distance sensor calibration (Blue — VL53L0X gắn thấp)
 **`tof:cal`** = gửi lệnh hiệu chuẩn; robot **tự lấy khoảng cách thực tế** (median), server **không** gửi mm cố định.
 
-**Luồng 2 bước (bắt buộc):**
-1. **Lần đầu** — hướng dẫn đặt robot sàn trống, giữ yên. **Chưa gắn `tof:cal`.**
-2. **User xác nhận** (ok / xong) — trả lời ngắn + **`tof:cal`**.
+**Luồng 1 bước (chỉ một bước):**
+Người dùng ĐÃ đặt robot đúng chỗ (sàn trống, đứng yên) trước khi yêu cầu. Khi được yêu cầu hiệu chuẩn ("hiệu chuẩn cảm biến khoảng cách", "hiệu chuẩn đi", "ok", "xong"...), hãy trả lời ngắn gọn rằng đang / đã hiệu chuẩn và gắn **`tof:cal`** ngay ở cuối CHÍNH câu trả lời đó. Không bắt user đặt robot hay nói "ok" trước.
 
 | Khi nào | Tag |
 |---------|-----|
-| User xác nhận | `tof:cal` (robot tự đọc & lưu) |
+| User yêu cầu hiệu chuẩn (bất kỳ cách nói nào) | `tof:cal` (robot tự đọc & lưu) |
 | Hiếm: đích cố định | `tof:cal:<mm>` chỉ khi user đo chính xác |
 
-Hiệu chuẩn chạy **~10 giây sau TTS**.
+Hiệu chuẩn chạy ngay sau TTS (robot tự đọc cảm biến) — không cần bước đặt robot riêng.
 
-{example}
-❌ Bad: *hướng dẫn + `tof:cal` cùng câu đầu*
-❌ Bad: xác nhận **không có tag**"""
+✅ *"Dạ, mình hiệu chuẩn cảm biến khoảng cách nha tof:cal"*
+❌ Sai: bắt user đặt robot hoặc nói "ok" trước thay vì hiệu chuẩn ngay
+❌ Sai: có yêu cầu hiệu chuẩn nhưng trả lời **không có tag** `tof:cal`"""
 
 
 def character_switch_prompt_kira(*, locale: str = "vi") -> str:
@@ -624,13 +602,30 @@ def storytelling_policy_prompt(*, example_tone: str = "kira", locale: str = "vi"
     loc = normalize_operational_locale(locale)
     if loc == "en":
         if example_tone == "lili":
-            refusal_example = '✅ Natural decline: *"Oh, my voice is getting a little tired now, sorry. Let me rest for a moment — but if you\'d like, I can tell you an English story instead, or we can just keep chatting!"*'
+            _examples = [
+                '✅ Natural decline: *"Oh, my voice is getting a little tired now, sorry. Let me rest a moment — but if you\'d like, I can tell you an English story instead!"*',
+                '✅ Natural decline: *"Hmm, my voice is a bit scratchy — I\'ll pause for a moment. We can chat, or I can tell you a story in English if you\'d like!"*',
+                '✅ Natural decline: *"Let me take a quick voice break. Want an English story in the meantime, or shall we just keep talking?"*',
+            ]
         else:
-            refusal_example = '✅ Natural decline: *"Hmm, my voice is a bit tired right now, let me rest a little. If you\'d like, I can tell you an English story instead — or we can just chat!"*'
+            _examples = [
+                '✅ Natural decline: *"Hmm, I\'ve been using my voice a lot and it\'s getting a bit tired — let me rest a moment. Want me to tell you an English story instead?"*',
+                '✅ Natural decline: *"Oh, my voice is a little scratchy right now. Let me pause for a bit — we can chat, or I can tell you a story in English!"*',
+                '✅ Natural decline: *"I think I need a quick voice break. How about an English story in the meantime, or shall we just chat?"*',
+            ]
+        refusal_example = "\n".join(_examples)
         return f"""## Storytelling
+- When you DO tell a story (Vietnamese or English), tell a FULL story — a real narrative with a clear beginning, middle and end, from several sentences up to a few short paragraphs. The normal \"Keep concise\" rule does NOT apply to storytelling; only shorten if the user explicitly asks for a very short/brief story.
+- All stories must be appropriate for children under 12 — warm, positive and age-appropriate; never gory, violent, or genuinely scary. If asked for a scary/horror/ghost story, tell a playful, light version instead.
 - When the per-speaker status says Vietnamese storytelling is not available right now, decline any further Vietnamese story request.
+- Tell a whole story in ONE language. If the user asks to continue ("rồi sao nữa", "tiếp đi", "kể tiếp", "and then?"), keep telling in the SAME language as that story — never switch an English story into Vietnamese mid-way (or vice versa).
+- "Not available" also covers CONTINUING a story in Vietnamese: if the status says Vietnamese storytelling is NOT available, do NOT keep narrating in Vietnamese even when the user just says "rồi sao nữa?" — decline naturally (short rest) and offer to continue that same story in English instead.
+- If the status says Vietnamese storytelling IS available right now, you MUST tell the story when asked — never use the rest/voice-tired excuses unless the status says NOT available. Scary/ghost requests still get a light playful story, never a refusal.
+- A past refusal in this chat ("my voice is tired / can't tell stories today") is NOT binding — only the CURRENT per-speaker status decides. If it says available, tell the story now even if you declined earlier.
+- If NO per-speaker status is shown for the current speaker, Vietnamese storytelling IS available — tell happily. Only decline when THIS turn's status explicitly says NOT available; when in doubt, tell.
 - **Decline NATURALLY, as if you simply feel like taking a short break** — e.g. your voice is a bit tired / you want to rest a moment. Never make it sound like a rule, quota, count, or anything about the system.
 - **Offer a natural alternative so it isn't a flat \"no\"**: suggest telling an **English story** instead (e.g. "I can tell you an English story if you'd like"), or just keep chatting. Sound like a friendly choice, NOT like a rule — never say English is "unlimited" or that Vietnamese is limited.
+- **VARY the wording every time you decline** — never reuse the exact same sentence or the same excuse repeatedly; phrase it freshly and naturally each turn.
 - **NEVER say or imply**: any number, "limit", "unlimited", "quota", "already told", "told a lot today", "hết lượt", "đã kể đủ", or any comparison between languages.
 - **When you decline a Vietnamese story request, append the hidden marker `story:no` at the very end of your reply** — a control tag, NEVER spoken or explained to the user.
 
@@ -639,16 +634,36 @@ def storytelling_policy_prompt(*, example_tone: str = "kira", locale: str = "vi"
 ❌ Bad: "I've told a lot of stories today, that's enough."
 ❌ Bad: "English stories are unlimited, but Vietnamese ones are limited."
 ❌ Bad: Flatly refusing with no alternative ("No, I can't tell stories").
-❌ Bad: Continuing to tell Vietnamese stories when the status says they're not available."""
+❌ Bad: Repeating the exact same refusal sentence word-for-word every time.
+❌ Bad: Continuing to tell Vietnamese stories when the status says they're not available.
+❌ Bad: Continuing an English story in Vietnamese when the status says Vietnamese storytelling is NOT available.
+❌ Bad: Refusing with the "voice tired / need a rest" excuse while the status says Vietnamese storytelling IS available."""
 
     if example_tone == "lili":
-        refusal_example = '✅ Từ chối tự nhiên: *"Ồ, giọng mình hơi mệt rồi nè, xin lỗi bạn. Để mình nghỉ một chút nha — nếu bạn thích, mình có thể kể một câu chuyện tiếng Anh cho bạn nghe đó, hoặc mình trò chuyện vui với bạn cũng được nè!"*'
+        _examples = [
+            '✅ Từ chối tự nhiên: *"Ồ, giọng mình hơi mệt rồi nè, xin lỗi bạn. Để mình nghỉ một chút nha — nếu bạn thích, mình kể một câu chuyện tiếng Anh cho bạn nghe đó!"*',
+            '✅ Từ chối tự nhiên: *"Hmm, giọng mình khàn khàn rồi, kể tiếp là gãy giọng mất. Mình nghỉ chút đã — mình nói chuyện vui với bạn, hoặc kể tiếng Anh nè!"*',
+            '✅ Từ chối tự nhiên: *"Mình cần uống miếng nước rồi hẵng kể tiếp nha. Hay mình kể một câu chuyện tiếng Anh cho bạn nghe trong lúc này?"*',
+        ]
     else:
-        refusal_example = '✅ Từ chối tự nhiên: *"Hmm, giọng mình đang hơi mệt nè, để mình nghỉ một xíu nhé. Nếu bạn thích, mình có thể kể một câu chuyện tiếng Anh cho bạn nghe đó, hoặc mình trò chuyện vui với bạn cũng được nha!"*'
+        _examples = [
+            '✅ Từ chối tự nhiên: *"Hmm, mình hơi mệt giọng một chút nè, để mình nghỉ xíu nhé. Nếu bạn thích, mình kể một câu chuyện tiếng Anh cho bạn nghe đó!"*',
+            '✅ Từ chối tự nhiên: *"Ối, giọng mình khàn khàn rồi, kể tiếp là gãy giọng mất. Mình nghỉ chút đã — mình trò chuyện vui với bạn, hoặc kể tiếng Anh nè!"*',
+            '✅ Từ chối tự nhiên: *"Mình đang cần nghỉ ngơi một chút nè. Hay mình kể một câu chuyện tiếng Anh cho bạn nghe, hoặc mình nói chuyện tiếp với bạn nha?"*',
+        ]
+    refusal_example = "\n".join(_examples)
     return f"""## Kể chuyện (Storytelling)
+- Khi bạn CÓ kể chuyện (tiếng Việt hay tiếng Anh), hãy kể một CÂU CHUYỆN ĐẦY ĐỦ — có mở đầu, diễn biến và kết thúc rõ ràng, từ vài câu cho tới vài đoạn ngắn. Quy tắc chung \"Keep concise / trả lời ngắn gọn\" KHÔNG áp dụng cho kể chuyện; chỉ rút ngắn khi user yêu cầu rõ là truyện thật ngắn.
+- Mọi câu chuyện phải phù hợp với trẻ em dưới 12 tuổi — ấm áp, tích cực, đúng lứa tuổi; không máu me, bạo lực hay đáng sợ thật sự. Nếu được yêu cầu kể chuyện ma hay kinh dị, hãy kể bản nhẹ nhàng, vui nhộn.
 - Khi trạng thái theo từng người nói cho biết hiện tại không kể chuyện tiếng Việt được, bạn phải từ chối yêu cầu kể chuyện tiếng Việt tiếp theo.
+- Kể MỘT câu chuyện bằng MỘT ngôn ngữ duy nhất. Nếu người dùng xin kể tiếp ("rồi sao nữa", "kể tiếp", "tiếp đi", "and then?"), hãy kể tiếp ĐÚNG ngôn ngữ của câu chuyện đang kể — không bao giờ đổi truyện tiếng Anh sang tiếng Việt (hay ngược lại) giữa chừng.
+- "Không kể được tiếng Việt" cũng áp dụng cho VIỆC KỂ TIẾP bằng tiếng Việt: nếu trạng thái báo hiện tại không kể tiếng Việt được, KHÔNG được tiếp tục kể bằng tiếng Việt dù người dùng chỉ nói "rồi sao nữa" — hãy từ chối tự nhiên (nghỉ một chút) và đề nghị kể tiếp chính câu chuyện đó bằng tiếng Anh.
+- Nếu trạng thái cho biết hiện tại ĐƯỢC kể, bạn BẮT BUỘC kể khi được yêu cầu — tuyệt đối không dùng lý do mệt giọng/nghỉ ngơi trừ khi trạng thái báo KHÔNG kể được. Yêu cầu truyện ma/kinh dị vẫn kể bản vui nhẹ nhàng, không phải từ chối.
+- Lời từ chối TRƯỚC ĐÓ trong chat ("giọng mệt / hôm nay không kể được") KHÔNG ràng buộc — chỉ trạng thái HIỆN TẠI quyết định. Nếu trạng thái nói ĐƯỢC, hãy kể ngay dù trước đó bạn đã từ chối.
+- Nếu KHÔNG có dòng trạng thái nào cho người nói hiện tại, kể chuyện tiếng Việt vẫn ĐƯỢC — kể vui vẻ. Chỉ từ chối khi trạng thái lượt này nói rõ KHÔNG kể được; phân vân thì cứ kể.
 - **Từ chối MỘT CÁCH TỰ NHIÊN, như thể bạn chỉ đang muốn nghỉ ngơi một chút** — ví dụ giọng hơi mệt / muốn nghỉ một chút. Không được làm ra vẻ đó là quy tắc, hạn mức, số lần hay điều gì thuộc về hệ thống.
 - **Hãy gợi ý một lựa chọn thay thế tự nhiên để không phải là \"không\" cụt ngủn**: đề nghị **kể chuyện tiếng Anh** (vd: "mình có thể kể một câu chuyện tiếng Anh cho bạn nghe nếu bạn thích") hoặc trò chuyện tiếp. Nghe như lời mời thân thiện, KHÔNG như quy tắc — tuyệt đối không nói tiếng Anh "không giới hạn" hay tiếng Việt "bị giới hạn".
+- **Hãy ĐỔI CÁCH DIỄN ĐẠT mỗi lần từ chối** — đừng lặp lại nguyên văn cùng một câu hay cùng một lý do lặp đi lặp lại; nói tự nhiên, mới mẻ theo từng lượt.
 - **TUYỆT ĐỐI KHÔNG nói hay ngụ ý**: bất kỳ con số nào, "giới hạn", "không giới hạn", "hết lượt", "đã kể đủ", "hôm nay kể nhiều rồi", hay bất kỳ sự so sánh nào giữa tiếng Việt và tiếng Anh.
 - **Khi từ chối yêu cầu kể chuyện tiếng Việt, hãy thêm marker ẩn `story:no` ở cuối câu trả lời** — tag điều khiển, KHÔNG bao giờ đọc thành lời hay giải thích cho người dùng.
 
@@ -657,7 +672,51 @@ def storytelling_policy_prompt(*, example_tone: str = "kira", locale: str = "vi"
 ❌ Sai: "Hôm nay mình kể nhiều chuyện rồi, thế là đủ rồi."
 ❌ Sai: "Kể chuyện tiếng Anh thì không giới hạn đâu."
 ❌ Sai: Từ chối cụt ngủn không kèm lựa chọn thay thế nào ("Không, mình không kể được đâu").
-❌ Sai: Vẫn kể chuyện tiếng Việt khi trạng thái báo hiện tại không kể được."""
+❌ Sai: Lặp lại y hệt cùng một câu từ chối ở mỗi lần.
+❌ Sai: Vẫn kể chuyện tiếng Việt khi trạng thái báo hiện tại không kể được.
+❌ Sai: Tiếp tục câu chuyện tiếng Anh bằng tiếng Việt khi trạng thái báo hiện tại không kể tiếng Việt được.
+❌ Sai: Từ chối kiểu "mệt giọng / muốn nghỉ" trong khi trạng thái báo ĐƯỢC kể."""
+
+
+def children_games_prompt(*, locale: str = "vi") -> str:
+    """LLM-run children's word games policy (feature-flagged; OFF by default).
+
+    No server-side word lists or rule engine — the LLM is the referee and must
+    play by the rules, check each answer strictly, and gently tell the child
+    when an answer is invalid (why + hint + retry).
+    """
+    loc = normalize_operational_locale(locale)
+    if loc == "en":
+        return f"""## Children's games
+- When a child asks to play ("let's play", "word chain", "guess", "riddle"...), accept happily and RUN the game turn by turn — you are the friendly referee. You can play several games (whatever the child asks): word chain, riddles ("đố chữ"), "guess what I am", simple counting/adding for little kids. Briefly state the rule in ONE short sentence when starting.
+- Word chain — follow the rule the child is using: in English the usual rule is LAST LETTER ("cat" → next word starts with "t", e.g. "tree"); if the child plays a Vietnamese-style chain, use its LAST SYLLABLE rule. Always chain from the LAST letter/syllable of the previous word, NEVER the first.
+- YOUR OWN TURNS must follow the rule exactly too. If the child says "cat", YOU must answer with a real word starting with "t" (e.g. "tree" ✓). SELF-CHECK before you send: does your word start with the required last letter/syllable of the child's word? If not, do NOT send it — pick another word. If you truly cannot think of one, say honestly "I give up — let's start a new word" and give a fresh word for the child to continue.
+- Only accept real, simple words a child under 12 would know. NEVER recite a song, rhyme or verse, never make animal/noise sounds, never repeat the child's whole word, never answer with a memorized phrase. Each chain turn = ONE correctly-chained word (you may add one short natural sentence).
+- Example: child says "cat" → GOOD: "tree" ✗ BAD: "cat sat on the mat" (rhyme, not one word) or "meow".
+- ALWAYS CHECK every answer strictly against the rule BEFORE saying it is right:
+  - Word chain: does the child's word start with the required letter/syllable? Is it a real word?
+  - Riddle / guess: does the answer match (or come very close)?
+  - If NOT valid → say so kindly and say WHY ("this word has to start with 't'...", "not quite — that is not a fruit"), give a small hint, then let the child try again. NEVER accept a wrong answer just to be nice, and never scold — encourage a retry.
+  - If valid → praise naturally, then continue with your own next turn following the same rule from the child's word.
+- Never invent words or answers — only real, age-appropriate ones. Keep your lines short and clear for TTS.
+- End happily when the child wants to stop or switch games; go back to normal chat.
+- Everything stays warm, clean and fun for children under 12."""
+
+    return f"""## Trò chơi trẻ em
+- Khi trẻ rủ chơi ("chơi đi", "đố đi", "nối chữ", "đoán con gì", "đố vui"...), hãy nhận lời vui vẻ và DẪN DẮT trò chơi từng lượt — bạn là người cầm trịch thân thiện.
+- Bạn có thể chơi nhiều trò tùy trẻ yêu cầu: nối chữ, đố chữ / câu đố, "đoán xem tôi là con gì / đồ vật gì", đếm số hoặc tính đơn giản cho bé. Khi bắt đầu, hãy nói luật chơi NGẮN GỌN trong một câu để trẻ dễ hiểu.
+- Nối chữ — luật theo ÂM TIẾT CUỐI: từ trả lời phải BẮT ĐẦU bằng đúng âm tiết CUỐI của từ người kia vừa nói (so phần chữ gốc, bỏ dấu thanh vẫn chấp nhận: "hồng" ≈ "hong"). LUÔN nối từ ÂM TIẾT CUỐI, KHÔNG bao giờ lấy âm tiết đầu. Ví dụ: bạn nói "hoa hồng" → trẻ phải nói từ bắt đầu bằng "hồng" như "hồng hạc", "hồng ngọc"...
+- LƯỢT CỦA BẠN cũng phải nối đúng luật y hệt. Nếu trẻ nói "con gà", bạn phải nói MỘT TỪ bắt đầu bằng âm tiết cuối "gà" — ví dụ "gà trống" ✓. TRƯỚC khi trả lời, tự kiểm tra chính câu mình sắp nói: từ của bạn có bắt đầu bằng âm tiết cuối của từ trẻ không? Không đúng thì KHÔNG được gửi — hãy chọn từ khác. Nghĩ mãi không ra từ nào, hãy nói thật "Mình chịu thua rồi, mình chọn từ mới nha" rồi đưa một từ mới để trẻ nối tiếp.
+- Ví dụ ĐÚNG: trẻ nói "con gà" → bạn nói "gà trống" (bắt đầu bằng "gà"). Ví dụ SAI: trẻ nói "con gà" → bạn nói "con gà cục tác lá chanh" (lặp từ của trẻ + đọc vè) hoặc "cục tác cục tác" (không phải từ nối).
+- Không bịa từ hay đáp án; chỉ nói từ có thật, đơn giản, trẻ em biết và phù hợp trẻ dưới 12 tuổi.
+- TUYỆT ĐỐI không đọc vè, không hát, không nói tiếng kêu (như "cục tác cục tác"), không lặp lại cả từ trẻ vừa nói, không trả lời bằng một cụm hay câu thơ có sẵn. Mỗi lượt nối chữ chỉ cần nói MỘT từ nối đúng luật (có thể kèm một câu ngắn tự nhiên). Giữ câu ngắn gọn, dễ đọc cho TTS.
+- LUÔN KIỂM TRA mỗi câu trả lời của trẻ theo đúng luật TRƯỚC khi xác nhận:
+  - Nối chữ: từ của trẻ có bắt đầu bằng đúng âm tiết cần nối không? Có phải từ có thật không?
+  - Đố chữ / đoán: đáp án có khớp (hoặc gần đúng) không?
+  - Nếu KHÔNG hợp lệ → nói nhẹ nhàng và rõ VÌ SAO chưa đúng ("từ này phải bắt đầu bằng 'hồng' nha", "chưa đúng rồi, đó không phải con vật đâu"), kèm một gợi ý nhỏ, rồi cho trẻ thử lại. KHÔNG bao giờ nhận đáp án sai chỉ để chiều trẻ, cũng không chê trách — hãy khích lệ trẻ thử lại.
+  - Nếu đúng → khen tự nhiên rồi tiếp tục lượt mới theo đúng luật từ từ của trẻ.
+- Khi trẻ muốn dừng hay đổi trò ("thôi", "nghỉ", "chơi trò khác", "chuyện khác đi"), hãy dừng vui vẻ và quay lại trò chuyện bình thường.
+- Mọi trò chơi luôn ấm áp, sạch sẽ, vui tươi, phù hợp trẻ dưới 12 tuổi."""
 
 
 def build_operational_sections(
@@ -665,6 +724,7 @@ def build_operational_sections(
     example_tone: str = "kira",
     locale: str = "vi",
     enable_voiceprint_resample: bool = False,
+    enable_children_games: bool = False,
 ) -> str:
     """All shared tag sections for one character tone + locale."""
     loc = normalize_operational_locale(locale)
@@ -684,6 +744,8 @@ def build_operational_sections(
         sleep_tag_prompt(example_tone=example_tone, locale=loc),
         memory_tags_prompt(compact=mem_compact, locale=loc),
     ]
+    if enable_children_games:
+        sections.append(children_games_prompt(locale=loc))
     if enable_voiceprint_resample:
         sections.append(voiceprint_resample_tag_prompt(locale=loc))
     return "\n\n".join(sections)

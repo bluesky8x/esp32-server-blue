@@ -142,6 +142,22 @@ async def startToChat(conn: "ConnectionHandler", text, *, system_prompt: bool = 
     if await handle_voice_enroll_turn(conn, speaker_name, content_text):
         return
 
+    # Multi-user voiceprint mode: ONLY talk to registered voices. An unrecognized /
+    # guest voice (未知说话人) is NOT sent to the LLM — no interaction at all.
+    # (New-voice enrollment is handled above, so registering a fresh voice still works.)
+    if (
+        speaker_name
+        and getattr(getattr(conn, "voice_user_store", None), "enroll_enabled", False)
+    ):
+        from core.utils.voice_user_store import _is_unknown_speaker
+
+        if _is_unknown_speaker(speaker_name):
+            conn.logger.bind(tag=TAG).info(
+                f"[voice-gate] ignoring guest/unregistered voice — no LLM interaction "
+                f"(speaker={speaker_name!r})"
+            )
+            return
+
     # 如果当日的输出字数大于限定的字数
     if conn.max_output_size > 0:
         if check_device_output_limit(

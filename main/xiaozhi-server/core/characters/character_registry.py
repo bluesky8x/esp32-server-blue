@@ -61,6 +61,7 @@ def get_operational_prompt(
     locale: str | None = None,
     *,
     enable_voiceprint_resample: bool = False,
+    enable_children_games: bool = False,
 ) -> str:
     character = resolve_character_id(character) or character.lower()
     loc = (locale or "vi").lower()
@@ -68,12 +69,16 @@ def get_operational_prompt(
         from core.characters.lili import build_lili_operational_prompt
 
         return build_lili_operational_prompt(
-            loc, enable_voiceprint_resample=enable_voiceprint_resample
+            loc,
+            enable_voiceprint_resample=enable_voiceprint_resample,
+            enable_children_games=enable_children_games,
         )
     from core.characters.kira import build_kira_operational_prompt
 
     return build_kira_operational_prompt(
-        loc, enable_voiceprint_resample=enable_voiceprint_resample
+        loc,
+        enable_voiceprint_resample=enable_voiceprint_resample,
+        enable_children_games=enable_children_games,
     )
 
 

@@ -20,13 +20,30 @@ from datetime import date
 
 DEFAULT_STORE_PATH = os.path.join("data", "voice_users.json")
 
+# Speaker markers meaning "voice not recognized" (guest / 未知说话人). Stories from
+# such speakers are ephemeral — they must NOT be counted toward any enrolled user.
+_UNKNOWN_SPEAKER_NAMES = frozenset({"未知说话人", "未知", "unknown", "__unknown__"})
+
+
+def _is_unknown_speaker(speaker: str | None) -> bool:
+    spk = (speaker or "").strip()
+    return bool(spk and spk.lower() in _UNKNOWN_SPEAKER_NAMES)
+
+DEFAULT_VI_STORY_DAILY_LIMIT = 5
+
 _GLOBAL_VOICE_USER_STORE: VoiceUserStore | None = None
+_GLOBAL_VOICE_USER_CONFIG: dict | None = None
 
 
 def get_voice_user_store(config: dict | None = None, path: str | None = None) -> VoiceUserStore:
-    global _GLOBAL_VOICE_USER_STORE
-    if _GLOBAL_VOICE_USER_STORE is None or (path and _GLOBAL_VOICE_USER_STORE.path != path):
+    global _GLOBAL_VOICE_USER_STORE, _GLOBAL_VOICE_USER_CONFIG
+    if (
+        _GLOBAL_VOICE_USER_STORE is None
+        or (path and _GLOBAL_VOICE_USER_STORE.path != path)
+        or (config is not None and config is not _GLOBAL_VOICE_USER_CONFIG)
+    ):
         _GLOBAL_VOICE_USER_STORE = VoiceUserStore(config=config, path=path)
+        _GLOBAL_VOICE_USER_CONFIG = config
     return _GLOBAL_VOICE_USER_STORE
 
 
@@ -45,6 +62,15 @@ class VoiceUserStore:
         # Default OFF (legacy behavior) — set voiceprint.enroll_enabled: true
         # in data/.config.yaml to enable.
         self.enroll_enabled = bool(cfg.get("enroll_enabled", False))
+        # Max Vietnamese stories per user per day (config: voiceprint.vi_story_daily_limit).
+        try:
+            self.vi_story_daily_limit = int(
+                cfg.get("vi_story_daily_limit", DEFAULT_VI_STORY_DAILY_LIMIT)
+            )
+        except (TypeError, ValueError):
+            self.vi_story_daily_limit = DEFAULT_VI_STORY_DAILY_LIMIT
+        if self.vi_story_daily_limit < 1:
+            self.vi_story_daily_limit = DEFAULT_VI_STORY_DAILY_LIMIT
 
         self.reserved_names: set[str] = set()
         for name in cfg.get("reserved_names") or []:
@@ -77,6 +103,10 @@ class VoiceUserStore:
 
     def _resolve_user_entry(self, speaker: str | None = None) -> tuple[str, dict] | tuple[None, None]:
         """Find matching user dict in self.users by speaker_id or name."""
+        if _is_unknown_speaker(speaker):
+            # Guest / unrecognized voice: not an enrolled user — never map them
+            # to the admin or anyone else (ephemeral, like their dialogue).
+            return None, None
         if speaker:
             spk_clean = str(speaker).strip()
             # 1. Direct speaker_id match
@@ -212,15 +242,17 @@ class VoiceUserStore:
                     vi_stories = int(ds.get("vi_count", 0))
 
                     lines = [f"## Storytelling Status (Speaker: {user_display})"]
-                    if vi_stories >= 5:
+                    if vi_stories >= self.vi_story_daily_limit:
                         lines.append(
                             f"- Vietnamese storytelling for {user_display}: NOT available right now. "
                             f"If {user_display} asks for a Vietnamese story, decline naturally as if "
-                            "you just want a short rest (e.g. your voice is a bit tired), then gently "
-                            "offer an English story instead or keep chatting — like a friendly choice, "
-                            "never a rule. NEVER mention a number, limit, 'unlimited', count, rule, or "
-                            "any Vietnamese/English comparison. Append the hidden marker `story:no` "
-                            "at the end of the refusal."
+                            "you just want a short rest (e.g. your voice is a bit tired / a little "
+                            "scratchy / you'd like a quick break), then gently offer an English story "
+                            "instead or keep chatting — like a friendly choice, never a rule. Vary the "
+                            "wording each time; never repeat the exact same refusal sentence. "
+                            "NEVER mention a number, limit, 'unlimited', count, rule, or any "
+                            "Vietnamese/English comparison. Append the hidden marker `story:no` at "
+                            "the end of the refusal."
                         )
                     else:
                         lines.append(
@@ -239,7 +271,7 @@ class VoiceUserStore:
                 ds = self._ensure_user_daily_stories(info)
                 name = info.get("name") or sid
                 vi_cnt = int(ds.get("vi_count", 0))
-                if vi_cnt >= 5:
+                if vi_cnt >= self.vi_story_daily_limit:
                     lines.append(
                         f"- {name}: Vietnamese storytelling not available right now — "
                         "decline naturally, never reveal a reason."

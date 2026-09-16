@@ -58,10 +58,13 @@ _DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
             "Xin lỗi, mình bị gián đoạn một chút. Bạn nói lại giúp mình nhé?"
         ),
         "llm_reply_directive": (
-            "ACTIVE LOCALE: Vietnamese. Reply in the language the user wants your content in — "
-            "normally Vietnamese with proper diacritics. If the user speaks Vietnamese but asks you "
-            "to tell/say/read/sing/translate something in English (e.g. \"kể chuyện tiếng Anh\"), "
-            "reply in English.\n"
+            "ACTIVE LOCALE: Vietnamese. Reply in the language the user wants — normally "
+            "Vietnamese with proper diacritics.\n"
+            "Only reply in English when the user EXPLICITLY asks for English content "
+            "(e.g. \"kể chuyện tiếng Anh\", \"nói tiếng Anh\", \"say it in English\"). "
+            "Do NOT switch to English just because a story is about another country, is a "
+            "real/true story, or because it feels natural in English — if the user speaks "
+            "Vietnamese and did NOT ask for English, reply in Vietnamese.\n"
             "Language tag (REQUIRED for English replies): put the tag FIRST at the very start of ANY "
             "reply that is in English, so the English voice is used:\n"
             "  [locale=en] <English reply>\n"
