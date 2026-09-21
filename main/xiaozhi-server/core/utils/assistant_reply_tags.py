@@ -28,6 +28,10 @@ from core.utils.robot_move_codec import (
     prepare_stream_chunk_for_tts,
     split_robot_move_tags,
 )
+from core.utils.robot_posture_codec import (
+    extract_posture_steps,
+    hold_incomplete_posture_suffix,
+)
 from core.utils.sleep_tag_codec import (
     apply_sleep_tag_from_assistant_text,
     hold_incomplete_sleep_suffix,
@@ -35,6 +39,10 @@ from core.utils.sleep_tag_codec import (
 from core.utils.tts_tag_sanitize import (
     may_contain_control_tags,
     strip_control_tags_for_tts,
+)
+from core.utils.servo_tag_codec import (
+    extract_servo_commands,
+    hold_incomplete_servo_suffix,
 )
 from core.utils.weather_tag_codec import hold_incomplete_wx_suffix
 from core.utils.voiceprint_tag_codec import (
@@ -55,12 +63,33 @@ class TagStreamHold:
     sleep: str = ""
     vpr: str = ""
     locale: str = ""
+    pst: str = ""
+    srv: str = ""
 
     def merged_prefix(self) -> str:
-        return self.locale + self.mv + self.char + self.mem + self.sleep + self.vpr + self.wx
+        return (
+            self.locale
+            + self.mv
+            + self.pst
+            + self.srv
+            + self.char
+            + self.mem
+            + self.sleep
+            + self.vpr
+            + self.wx
+        )
 
     def has_suffix_hold(self) -> bool:
-        return bool(self.locale or self.char or self.mem or self.sleep or self.vpr or self.wx)
+        return bool(
+            self.locale
+            or self.char
+            or self.mem
+            or self.sleep
+            or self.vpr
+            or self.wx
+            or self.pst
+            or self.srv
+        )
 
     def clear(self) -> None:
         self.mv = ""
@@ -70,6 +99,8 @@ class TagStreamHold:
         self.sleep = ""
         self.vpr = ""
         self.locale = ""
+        self.pst = ""
+        self.srv = ""
 
 
 def get_tag_hold_from_conn(conn: ConnectionHandler) -> TagStreamHold:
@@ -137,8 +168,14 @@ def dispatch_control_tags_from_text(
     conn._dispatch_wx_from_assistant_text(
         text, label=label, defer_post_tts=defer_post_tts
     )
+    conn._dispatch_servo_from_assistant_text(
+        text, label=label, defer_post_tts=defer_post_tts
+    )
     if sentence_id is not None:
         conn._dispatch_mv_from_assistant_text(
+            sentence_id, text, label=label, defer_post_tts=defer_post_tts
+        )
+        conn._dispatch_posture_from_assistant_text(
             sentence_id, text, label=label, defer_post_tts=defer_post_tts
         )
 
@@ -191,13 +228,22 @@ def process_assistant_stream_chunk(
         new_text = hold.merged_prefix() + (new_text or "")
         hold.clear()
     elif hold.has_suffix_hold():
-        suffix = hold.locale + hold.char + hold.mem + hold.sleep + hold.vpr + hold.wx
+        suffix = (
+            hold.locale
+            + hold.char
+            + hold.mem
+            + hold.sleep
+            + hold.vpr
+            + hold.wx
+            + hold.pst
+        )
         hold.locale = ""
         hold.char = ""
         hold.mem = ""
         hold.sleep = ""
         hold.vpr = ""
         hold.wx = ""
+        hold.pst = ""
         new_text = suffix + (new_text or "")
 
     if not new_text and not flush:
@@ -207,6 +253,8 @@ def process_assistant_stream_chunk(
     if (
         not flush
         and not hold.mv
+        and not hold.pst
+        and not hold.srv
         and not may_contain_control_tags(new_text)
     ):
         spoken = new_text
@@ -237,6 +285,34 @@ def process_assistant_stream_chunk(
             chunk, default_sec=default_mv_sec, max_sec=max_mv_sec
         )
 
+    # Posture tags (pst:*) — same trick as mv: keep a partial tag in the hold so a tag
+    # split across stream chunks is never spoken aloud.
+    pst_source = work if flush else (hold.pst + work)
+    posture_steps = extract_posture_steps(pst_source)
+    if flush:
+        hold.pst = ""
+    else:
+        held = hold_incomplete_posture_suffix(work)
+        hold.pst = held
+        if held:
+            cleaned = cleaned[: len(cleaned) - len(held)] if cleaned.endswith(held) else cleaned
+
+    # Servo calibration tags (srv:*) — same hold trick; release only on flush so a tag
+    # split across chunks never reaches TTS. Dispatch runs after TTS, like tof:/vol:.
+    srv_source = work if flush else (hold.srv + work)
+    servo_commands = extract_servo_commands(srv_source) if flush else []
+    if flush:
+        hold.srv = ""
+    else:
+        held_srv = hold_incomplete_servo_suffix(work)
+        hold.srv = held_srv
+        if held_srv:
+            cleaned = (
+                cleaned[: len(cleaned) - len(held_srv)]
+                if cleaned.endswith(held_srv)
+                else cleaned
+            )
+
     dispatch_control_tags_from_text(
         conn,
         work or raw,
@@ -255,6 +331,12 @@ def process_assistant_stream_chunk(
         conn._dispatch_mv_from_assistant_text(
             sentence_id, cleaned, label=mv_label, defer_post_tts=True
         )
+
+    if posture_steps and flush:
+        conn._dispatch_posture_steps(sentence_id, posture_steps, defer_post_tts=True)
+
+    if servo_commands and flush:
+        conn._dispatch_servo_commands(servo_commands, defer_post_tts=True)
 
     spoken = strip_control_tags_for_tts(cleaned or "", trim_edges=flush)
     if not spoken or not spoken.strip():

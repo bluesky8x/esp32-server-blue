@@ -72,3 +72,21 @@ docker logs -f -n 50 xiaozhi-esp32-server
 # 查看web日志
 docker logs -f -n 50 xiaozhi-esp32-server-web
 ```
+
+## 6、只改 server 代码时：同步文件，不重新编译镜像（Blue 部署）
+
+server 代码由 `docker/Dockerfile` 的 `COPY main/xiaozhi-server .` 打进镜像，所以传统做法每次改动都要 `--build`，会产生大量 `<none>` 悬空镜像占满 Docker 磁盘。
+
+`run-docker.sh` 已提供不重新编译的方式：把源码 `tar` 进正在运行的容器再重启进程。
+
+```bash
+./run-docker.sh up      # 启动：镜像已存在就直接复用，不编译
+# ...修改 main/xiaozhi-server/ 下的代码...
+./run-docker.sh sync    # 同步代码进容器 + 重启（秒级，不新增镜像层）
+```
+
+- `sync` 只同步镜像内代码路径：`app.py`、`core/`、`config/`、`plugins_func/`、`config.yaml`、`config_from_api.yaml`、`mcp_server_settings.json`、`agent-base-prompt.txt`（自动跳过 `__pycache__`）。
+- `data/`、`tmp/`、`music/`、`models/` 本来就是 volume，无需同步。
+- 只有改动 `requirements.txt` 或 `Dockerfile` 时才需要 `./run-docker.sh rebuild`。
+- Docker 磁盘被旧镜像占满时：`./run-docker.sh prune`（清理悬空镜像 + 编译缓存）。
+

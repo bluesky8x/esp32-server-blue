@@ -147,6 +147,15 @@ async def handle_mcp_message(
                 logger.bind(tag=TAG).debug(
                     f"客户端MCP服务器信息: name={name}, version={version}"
                 )
+                if name:
+                    # Danh tính board: server chọn tool theo board profile
+                    # (robot_move_codec.BOARD_TOOL_PROFILES) thay vì dò mù.
+                    conn.device_board = str(name)
+                    conn.device_firmware_version = str(version or "")
+                    logger.bind(tag=TAG).info(
+                        f"设备 board={conn.device_board} "
+                        f"firmware={conn.device_firmware_version or '?'}"
+                    )
 
             await asyncio.sleep(1)
             logger.bind(tag=TAG).debug("初始化完成，开始请求MCP工具列表")

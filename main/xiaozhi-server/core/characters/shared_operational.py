@@ -57,7 +57,11 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:s | stop — stop moving |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
-Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
+Default and maximum come from the server's duration policy (see the end of this prompt). Stop ignores duration.
+
+**Steps (legged robots):** `mv:<code>:steps=<N>` — N = full gait cycles (all four legs lift and plant once), 1-8.
+Use it when the user counts steps (*"go forward 3 steps"*) and *also* say the count in the sentence:
+*"Okie, going forward 3 steps mv:f:steps=3"*. Never mix `steps=` with a second count.
 
 **Specific Song Parameter:** When the user asks to dance to a **specific song/artist**, you **must append `:song=<Song Title>`** to the dance tag:
 - General dance request (*"dance for me"*, *"dance again"*): `mv:d` or `mv:d2` or `mv:d3`
@@ -70,9 +74,8 @@ Even if you are unsure of the exact title or the user's speech was misheard and 
 
 | Example | Tag |
 |---------|-----|
-| Turn left ~5 s (default) | `mv:t` |
-| Turn left 10 s | `mv:t:10` |
 | Forward 30 s | `mv:f:30` |
+| Forward 3 steps | `mv:f:steps=3` |
 | Circle / spin 10 s | `mv:c:10` |
 | Dance (preset / random) | `mv:d` or `mv:ld` |
 | Dance with specific song | `mv:d:song=Shape of You` |
@@ -145,7 +148,11 @@ The code is stripped before TTS — write your full natural sentence first, then
 | mv:s | stop — dừng, dừng lại |
 
 **Duration (seconds):** append ``:<N>`` after the code when the user specifies time.
-Default **5 s** if omitted; maximum **30 s**. Stop ignores duration.
+Mặc định và tối đa theo "duration policy" của server (xem cuối prompt này). Stop ignores duration.
+
+**Số bước (robot chân):** `mv:<code>:steps=<N>` — N = số chu kỳ gait đầy đủ (cả 4 chân nhấc-hạ 1 lần), 1-8.
+Dùng khi người dùng đếm bước (*"đi tới 3 bước"*) và nhắc lại số bước trong câu:
+*"Dạ mình đi tới 3 bước nha mv:f:steps=3"*. Không trộn `steps=` với một con số thứ hai.
 
 **Tham số tên bài hát (Song Parameter):** Khi người dùng yêu cầu nhảy theo một **bài hát cụ thể**, bạn **phải thêm `:song=<Tên bài hát>`** vào thẻ nhảy:
 - Yêu cầu nhảy chung chung (*"nhảy đi"*, *"nhảy nữa đi"*, *"bạn hãy nhảy nữa"*, *"nhảy coi"*): `mv:d` hoặc `mv:d2` hoặc `mv:d3`
@@ -158,9 +165,8 @@ Kể cả khi bạn không chắc chắn tên bài hoặc người dùng nói sa
 
 | Example | Tag |
 |---------|-----|
-| Turn left ~5 s (default) | `mv:t` |
-| Turn left 10 s | `mv:t:10` |
 | Forward 30 s | `mv:f:30` |
+| Đi tới 3 bước | `mv:f:steps=3` |
 | Circle / đi vòng vòng 10 s | `mv:c:10` |
 | Nhảy dance 1 (nhạc mặc định) | `mv:d` hoặc `mv:ld` |
 | Nhảy theo bài hát cụ thể | `mv:d:song=Đồi Hoa Mặt Trời` |
@@ -719,6 +725,42 @@ def children_games_prompt(*, locale: str = "vi") -> str:
 - Mọi trò chơi luôn ấm áp, sạch sẽ, vui tươi, phù hợp trẻ dưới 12 tuổi."""
 
 
+def servo_calibrate_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") -> str:
+    """Servo calibration tags (Blue robot legs) — tag style giống tof:cal / mv:*.
+
+    LLM KHÔNG tự gọi tool self.servo.* (nó từ chối), nên chỉ gắn tag `srv:*` ở cuối câu;
+    server parse tag rồi gọi tool thiết bị (xem core/utils/servo_tag_codec.py).
+    """
+    loc = normalize_operational_locale(locale)
+    if loc == "en":
+        return """## Servo calibration (Blue robot legs)
+When the user asks to calibrate / fix the servos, append EXACTLY ONE `srv:` tag at the **very end** of your reply — the server calls the device tool for you:
+| User request | Tag |
+|---|---|
+| "set the servo pulse range 1000 to 2000 microseconds", "servos only tick, they don't turn" | `srv:range=1000-2000` |
+| "servo 2 is off by -3 degrees" | `srv:trim=2:-3` |
+| "leg 2 turns the wrong way" | `srv:invert=2:1` |
+| "test servo 0 at 1200 microseconds" | `srv:raw=0:1200` |
+| "relax the servos" / "energise the servos again" | `srv:relax` / `srv:enable` |
+Joint numbers are 0-7 (0=front-left hip, 1=front-left knee, 2=front-right hip, 3=front-right knee, 4=rear-left hip, 5=rear-left knee, 6=rear-right hip, 7=rear-right knee).
+Never answer "I can't do that" for a servo request — append the tag and confirm briefly.
+✅ *"Okie, setting the pulse range to 1000-2000 us now srv:range=1000-2000"*
+❌ Bad: refusing because you think you cannot control the servos"""
+    return """## Hiệu chuẩn servo (chân robot Blue)
+Khi người dùng yêu cầu hiệu chuẩn / sửa servo, hãy gắn ĐÚNG MỘT tag `srv:` ở **cuối cùng** câu trả lời — server sẽ tự gọi tool thiết bị:
+| Người dùng nói | Tag |
+|---|---|
+| "đặt dải xung servo 1000 đến 2000 micro giây", "servo chỉ kêu tạch tạch không quay" | `srv:range=1000-2000` |
+| "servo 2 lệch -3 độ" | `srv:trim=2:-3` |
+| "chân 2 quay ngược chiều" | `srv:invert=2:1` |
+| "test servo 0 ở 1200 micro giây" | `srv:raw=0:1200` |
+| "thả lỏng servo" / "cấp lực lại cho servo" | `srv:relax` / `srv:enable` |
+Số joint là 0-7 (0=hip trước-trái, 1=knee trước-trái, 2=hip trước-phải, 3=knee trước-phải, 4=hip sau-trái, 5=knee sau-trái, 6=hip sau-phải, 7=knee sau-phải).
+KHÔNG bao giờ trả lời "mình chưa làm được" với yêu cầu servo — hãy gắn tag và xác nhận ngắn gọn.
+✅ *"Dạ, mình đặt dải xung 1000-2000 micro giây nha srv:range=1000-2000"*
+❌ Sai: từ chối vì nghĩ rằng không điều khiển được servo"""
+
+
 def build_operational_sections(
     *,
     example_tone: str = "kira",
@@ -740,6 +782,7 @@ def build_operational_sections(
         volume_tags_prompt(example_tone=example_tone, locale=loc),
         weather_tags_prompt(example_tone=example_tone, locale=loc),
         tof_calibrate_tags_prompt(example_tone=example_tone, locale=loc),
+        servo_calibrate_tags_prompt(example_tone=example_tone, locale=loc),
         char_switch,
         sleep_tag_prompt(example_tone=example_tone, locale=loc),
         memory_tags_prompt(compact=mem_compact, locale=loc),

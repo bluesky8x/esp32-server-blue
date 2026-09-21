@@ -38,17 +38,78 @@ lan_ip_hint() {
   fi
 }
 
+IMAGE="esp32-server-blue:latest"
+
+# Code paths baked into the image by docker/Dockerfile (`COPY main/xiaozhi-server .`).
+# Everything else (data/, tmp/, music/, models/) is already a runtime volume.
+SYNC_PATHS=(
+  app.py
+  core
+  config
+  plugins_func
+  config.yaml
+  config_from_api.yaml
+  mcp_server_settings.json
+  agent-base-prompt.txt
+)
+
+image_exists() {
+  docker image inspect "$IMAGE" >/dev/null 2>&1
+}
+
+container_id() {
+  compose ps -q xiaozhi-server 2>/dev/null | head -n1
+}
+
+# Copy the current source into the running container — no rebuild, no new image layers.
+sync_code() {
+  local cid
+  cid="$(container_id)"
+  if [[ -z "$cid" ]]; then
+    echo "Container is not running. Start it first: $0 up"
+    exit 1
+  fi
+
+  local src="$ROOT/main/xiaozhi-server"
+  local present=()
+  for p in "${SYNC_PATHS[@]}"; do
+    [[ -e "$src/$p" ]] && present+=("$p")
+  done
+
+  echo "Syncing ${#present[@]} path(s) -> /opt/xiaozhi-esp32-server (code only, no rebuild)"
+  tar -cf - -C "$src" \
+    --exclude='__pycache__' --exclude='*.pyc' --exclude='*.pyo' \
+    "${present[@]}" \
+    | docker exec -i "$cid" tar -xf - -C /opt/xiaozhi-esp32-server
+
+  echo "Restarting xiaozhi-server to reload the code..."
+  compose restart xiaozhi-server
+  echo "Done. Logs: $0 logs"
+}
+
 cmd="${1:-help}"
 
 case "$cmd" in
   up)
     ensure_config
-    compose up -d --build
+    if image_exists; then
+      # Reuse the existing image: rebuilding on every start leaves stale <none> images.
+      echo "Reusing image $IMAGE (no rebuild)."
+      echo "Code changed? Run: $0 sync"
+      compose up -d
+    else
+      echo "Image $IMAGE not found — first build, this takes a few minutes..."
+      compose up -d --build
+    fi
     ip="$(lan_ip_hint)"
     echo ""
     echo "Server started."
     [[ -n "$ip" ]] && echo "OTA test:  curl http://${ip}:8003/xiaozhi/ota/"
     echo "Logs:      $0 logs"
+    ;;
+  sync)
+    ensure_config
+    sync_code
     ;;
   down)
     compose down
@@ -65,14 +126,25 @@ case "$cmd" in
   build)
     compose build xiaozhi-server
     ;;
+  rebuild)
+    compose build xiaozhi-server
+    compose up -d
+    ;;
+  prune)
+    docker image prune -f
+    docker builder prune -f
+    docker system df
+    ;;
   shell)
     compose exec xiaozhi-server bash
     ;;
   help|*)
     cat <<EOF
-Usage: $0 {up|down|restart|logs|ps|build|shell}
+Usage: $0 {up|sync|down|restart|logs|ps|build|rebuild|prune|shell}
 
-  up       Build and start xiaozhi-server (ports 8000, 8003)
+  up       Start xiaozhi-server, reusing the existing image (no rebuild)
+  sync     Copy the current source into the running container + restart
+           (no rebuild, no new image layers — use this for code changes)
   down     Stop server container
 
 Local TTS runs separately:
@@ -82,7 +154,9 @@ Local TTS runs separately:
   restart  Restart xiaozhi-server
   logs     Follow server logs
   ps       Show container status
-  build    Rebuild server image only
+  build    Rebuild the image (only when requirements.txt / Dockerfile change)
+  rebuild  Rebuild the image and restart
+  prune    Drop dangling images + build cache (frees disk space)
   shell    Shell into running server container
 
 Before first run, edit main/xiaozhi-server/data/.config.yaml:

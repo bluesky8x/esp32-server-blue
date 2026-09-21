@@ -26,6 +26,7 @@ Server prefers ``self.motor.move`` with ``duration_ms`` when available.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 MAX_ROBOT_MOVE_SEQUENCE = 5
@@ -35,7 +36,58 @@ DANCE_MOVE_DURATION_SEC = 24
 DANCE2_MOVE_DURATION_SEC = 100
 DANCE3_MOVE_DURATION_SEC = 26
 
-import re
+# --- "bước" (steps) ---
+# 1 bước = 1 chu kỳ crawl = cả 4 chân nhấc-hạ một lần (theo quy ước của robot nhện v4).
+# Trên robot có self.gait.walk/self.gait.turn, tag `mv:f:steps=3` được gửi NGUYÊN số bước
+# (chính xác tuyệt đối). Trên robot chỉ có self.motor.* (blue-v2) thì quy đổi ra duration_ms
+# bằng thời gian thật của N bước.
+DEFAULT_CRAWL_STEP_MS = 350  # khớp default step_ms của tool self.gait.walk (chỉ để ƯỚC LƯỢNG)
+MAX_MOVE_STEPS_PER_CALL = 8  # firmware self.gait.walk chặn 1..8 (vượt → MCP báo lỗi)
+# Hằng số pha của gait (main/boards/blue-v4/config.h) — CHỈ dùng để ước lượng thời gian chờ
+# của tag `steps=`; việc đi thật do firmware quyết.
+# Một chân = 1 cung vung (mix hip+knee trên cùng tham số) + chờ chân chạm nền + push.
+_CRAWL_SETTLE_MS = 288  # knee_fold mặc định 72 deg / ~250 deg/s (servo dưới tải)
+# step_ms hiệu dụng cho việc quy đổi "giây → bước" (connection set lại theo config).
+_default_crawl_step_ms = DEFAULT_CRAWL_STEP_MS
+
+
+def crawl_cycle_ms(step_ms: int | None = None) -> int:
+    """Thời gian thật (ms) của MỘT bước = 4 chân × (lift+swing + plant + dwell + push).
+
+    Các pha chạy tuần tự nên không thể dùng step_ms * 4 (cách tính cũ sai ~4 lần).
+    """
+    if step_ms is None:
+        step_ms = _default_crawl_step_ms
+    ms = max(200, min(int(step_ms), 6000))
+    swing = max(ms, 300)
+    per_leg = swing + _CRAWL_SETTLE_MS + swing
+    return per_leg * 4
+
+
+def set_default_crawl_step_ms(step_ms: int) -> None:
+    """Connection gọi khi khởi tạo để mọi quy đổi "giây → bước" khớp config."""
+    global _default_crawl_step_ms
+    try:
+        _default_crawl_step_ms = max(200, min(int(step_ms), 6000))
+    except (TypeError, ValueError):
+        pass
+
+
+def steps_for_duration(duration_sec: int, step_ms: int | None = None) -> int:
+    """Đổi "giây" của người dùng ra số bước (làm tròn), clamp 1..MAX_MOVE_STEPS_PER_CALL."""
+    cycle = max(crawl_cycle_ms(step_ms), 400)
+    steps = int(round(max(1, int(duration_sec)) * 1000 / cycle))
+    return max(1, min(steps, MAX_MOVE_STEPS_PER_CALL))
+
+
+def clamp_move_steps(steps: int | str | None) -> int | None:
+    if steps is None or steps == "":
+        return None
+    try:
+        value = int(steps)
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(value, MAX_MOVE_STEPS_PER_CALL))
 
 # mv:t  mv:t:10  mv:d3  mv:ld2  Kita mv:f:5  mv:d:song=Shape of You  mv:d2:song=Cắt đôi nỗi sầu
 MOVE_TAG_RE = re.compile(
@@ -80,6 +132,83 @@ MOVE_WHEEL_SPEEDS: dict[str, tuple[int, int]] = {
 }
 
 MOTOR_MOVE_TOOL_CANDIDATES: tuple[str, ...] = ("self.motor.move",)
+
+# Robot có gait chân (blue-v4): tag `steps=` đi thẳng vào 2 tool này.
+GAIT_WALK_TOOL: str = "self.gait.walk"
+GAIT_TURN_TOOL: str = "self.gait.turn"
+# code → (tool, direction). Turn: -1 = trái, +1 = phải (khớp blue_v4_motor_compat.cc).
+MOVE_STEPS_TO_GAIT: dict[str, tuple[str, int]] = {
+    "f": (GAIT_WALK_TOOL, 1),
+    "b": (GAIT_WALK_TOOL, -1),
+    "t": (GAIT_TURN_TOOL, -1),
+    "p": (GAIT_TURN_TOOL, 1),
+}
+
+# --- Board profiles -----------------------------------------------------------
+# Thiết bị tự khai board khi bắt tay MCP: {"serverInfo": {"name": "blue-v4", ...}}
+# (device_mcp/mcp_handler.py lưu vào conn.device_board). Server chọn tool theo profile
+# thay vì dò mù:
+#   * blue-v4 (robot nhện, gait joint-space): `steps=` đi thẳng vào self.gait.walk /
+#     self.gait.turn (chính xác số bước), còn "giây" dùng self.motor.move(duration_ms).
+#   * blue-v2 (bánh xe / 2-DoF): chỉ self.motor.* — mọi yêu cầu quy về duration_ms.
+# Thêm board mới: thêm 1 entry. Role "walk"/"turn" chỉ có nghĩa với robot chân.
+BOARD_TOOL_PROFILES: dict[str, dict[str, str]] = {
+    "blue-v4": {
+        "walk": "self.gait.walk",
+        "turn": "self.gait.turn",
+        "move": "self.motor.move",
+        "circle": "self.motor.circle",
+        "dance": "self.motor.dance",
+        "stop": "self.motor.stop",
+    },
+    "blue-v2": {
+        "move": "self.motor.move",
+        "circle": "self.motor.circle",
+        "dance": "self.motor.dance",
+        "stop": "self.motor.stop",
+    },
+}
+
+_BOARD_ALIASES: dict[str, str] = {
+    "bluev4": "blue-v4",
+    "blue_v4": "blue-v4",
+    "blue4": "blue-v4",
+    "bluev2": "blue-v2",
+    "blue_v2": "blue-v2",
+    "blue2": "blue-v2",
+}
+
+
+def normalize_board_name(board: str | None) -> str | None:
+    """"blue_v4" / "BlueV4" / "blue-v4-2.4.1" -> "blue-v4"."""
+    if not board:
+        return None
+    key = str(board).strip().lower().replace(" ", "")
+    key = _BOARD_ALIASES.get(key, key)
+    for known in BOARD_TOOL_PROFILES:
+        if key == known or key.startswith(known + "-") or key.startswith(known + "."):
+            return known
+    return key
+
+
+def board_tool_profile(board: str | None) -> dict[str, str]:
+    """Tool map của board (rỗng = board lạ → dùng đường dò tool như cũ)."""
+    key = normalize_board_name(board)
+    if key and key in BOARD_TOOL_PROFILES:
+        return BOARD_TOOL_PROFILES[key]
+    return {}
+
+
+def board_has_gait(board: str | None) -> bool:
+    """True nếu board là robot chân (có walk/turn) — dùng để dạy LLM dạng `steps=`."""
+    profile = board_tool_profile(board)
+    return bool(profile.get("walk") and profile.get("turn"))
+
+
+# `mv:f:steps=3` / `mv:f:3:steps=4` / tiếng Việt `mv:f:buoc=3`
+_STEPS_IN_TAG_RE = re.compile(
+    r":\s*(?:steps|buoc|bước)\s*=\s*(\d{1,2})", re.IGNORECASE
+)
 
 _REFUSAL_RE = re.compile(
     r"không thể|cannot|không quay|không đi|không làm được", re.IGNORECASE
@@ -214,6 +343,8 @@ class RobotMoveStep:
     code: str
     duration_sec: int
     song: str | None = None
+    # Số "bước" người dùng yêu cầu (1 bước = 1 chu kỳ crawl 4 chân). None = dùng giây.
+    steps: int | None = None
 
 
 def clamp_duration(
@@ -273,11 +404,20 @@ def extract_move_steps(
             if s:
                 song = s
 
+        # `mv:f:steps=3` bị regex bắt vào nhóm "song" (vì \"steps=3\" không phải số thuần).
+        steps_match = _STEPS_IN_TAG_RE.search(match.group(0))
+        move_steps = clamp_move_steps(steps_match.group(1)) if steps_match else None
+        if move_steps is None and song and song.lower().startswith("steps="):
+            move_steps = clamp_move_steps(song[6:])
+        if move_steps is not None:
+            song = None
+
         duration = clamp_duration(
             duration_raw, default_sec=default_sec, max_sec=max_sec
         )
         if code == "s":
             duration = 0
+            move_steps = None
         elif code in DANCE_CODES:
             track = dance_track_for_code(code)
             if track == 3:
@@ -286,7 +426,15 @@ def extract_move_steps(
                 duration = DANCE2_MOVE_DURATION_SEC
             else:
                 duration = DANCE_MOVE_DURATION_SEC
-        steps.append(RobotMoveStep(code=code, duration_sec=duration, song=song))
+            move_steps = None
+        elif move_steps is not None:
+            # Thời gian thật của N bước — dùng cho cooldown/chờ thiết bị, không gửi xuống.
+            duration = max(1, round(move_steps * crawl_cycle_ms() / 1000.0))
+        steps.append(
+            RobotMoveStep(
+                code=code, duration_sec=duration, song=song, steps=move_steps
+            )
+        )
     return steps
 
 
@@ -435,22 +583,13 @@ def split_robot_move_steps(
 
 
 def resolve_mcp_tool(code: str, available: set[str] | None = None) -> str | None:
-    from core.utils.util import sanitize_tool_name
-
     code = (code or "").lower()
     candidates = MOVE_CODE_TO_MCP.get(code, ())
     if not candidates:
         return None
 
     def pick(name: str) -> str | None:
-        if available is None:
-            return name
-        if name in available:
-            return name
-        sanitized = sanitize_tool_name(name)
-        if sanitized in available:
-            return sanitized
-        return None
+        return resolve_named_tool(name, available)
 
     if available is not None:
         for name in candidates:
@@ -462,31 +601,68 @@ def resolve_mcp_tool(code: str, available: set[str] | None = None) -> str | None
 
 
 def resolve_motor_move_tool(available: set[str] | None = None) -> str | None:
-    from core.utils.util import sanitize_tool_name
-
     for name in MOTOR_MOVE_TOOL_CANDIDATES:
-        if available is None:
-            return name
-        if name in available:
-            return name
-        sanitized = sanitize_tool_name(name)
-        if sanitized in available:
-            return sanitized
+        hit = resolve_named_tool(name, available)
+        if hit:
+            return hit
     return None
 
 
+# Giống core.utils.util.sanitize_tool_name — inline để codec không phải import numpy.
+_UNSAFE_TOOL_CHARS_RE = re.compile(r"[^a-zA-Z0-9_\-\u4e00-\u9fff]")
+
+
+def resolve_named_tool(name: str | None, available: set[str] | None = None) -> str | None:
+    """Kiểm tra một tool cụ thể (tên trong board profile) có trên thiết bị không."""
+    if not name:
+        return None
+    if available is None:
+        return name
+    if name in available:
+        return name
+    sanitized = _UNSAFE_TOOL_CHARS_RE.sub("_", name)
+    return sanitized if sanitized in available else None
+
+
 def build_mcp_call(
-    step: RobotMoveStep, available: set[str] | None = None
+    step: RobotMoveStep,
+    available: set[str] | None = None,
+    *,
+    board: str | None = None,
 ) -> tuple[str | None, dict]:
-    """Map mv step → MCP tool name + JSON arguments."""
+    """Map mv step → MCP tool name + JSON arguments.
+
+    `board` là tên board thiết bị tự khai (conn.device_board, vd "blue-v4").
+
+    Server CHỈ ra lệnh ở mức "hướng + số bước" (hoặc "hướng + thời gian"); mọi thứ cơ học
+    (1 bước = 4 chân/8 servo nhấc-hạ thế nào, biên độ, tốc độ, chiều) do firmware quyết:
+      * robot chân + tag `steps=`: `self.gait.walk/turn {direction, steps}`
+      * robot chân + tag "giây":  `self.motor.move {left, right, duration_ms}`
+        (firmware tự quy duration → số bước bằng hằng số pha của nó)
+      * board không có gait (blue-v2): như cũ, chỉ self.motor.*
+    """
     code = step.code
+    profile = board_tool_profile(board)
     if code == "s":
-        return resolve_mcp_tool("s", available), {}
+        return resolve_named_tool(profile.get("stop") or "self.motor.stop", available), {}
 
     if code in DANCE_CODES:
         track = dance_track_for_code(code)
         args: dict = {"track": track}
-        return resolve_mcp_tool("d", available), args
+        want = profile.get("dance") or "self.motor.dance"
+        return (
+            resolve_named_tool(want, available) or resolve_mcp_tool("d", available),
+            args,
+        )
+
+    # --- Robot chân + người dùng đếm BƯỚC: chuyển nguyên số bước cho firmware ---
+    if step.steps and code in MOVE_STEPS_TO_GAIT:
+        gait_tool, direction = MOVE_STEPS_TO_GAIT[code]
+        role = "walk" if gait_tool == GAIT_WALK_TOOL else "turn"
+        want = profile.get(role) or gait_tool
+        resolved = resolve_named_tool(want, available)
+        if resolved:
+            return resolved, {"direction": int(direction), "steps": int(step.steps)}
 
     duration_ms = (
         step.duration_sec * 1000
@@ -494,12 +670,18 @@ def build_mcp_call(
         else DEFAULT_ROBOT_MOVE_DURATION_SEC * 1000
     )
 
-    circle_tool = resolve_mcp_tool("c", available) if code == "c" else None
-    if circle_tool == "self.motor.circle" and step.duration_sec > 0:
+    circle_tool = (
+        resolve_named_tool(profile.get("circle") or "self.motor.circle", available)
+        if code == "c"
+        else None
+    )
+    if circle_tool and step.duration_sec > 0:
         return circle_tool, {"duration_ms": duration_ms}
 
     speeds = MOVE_WHEEL_SPEEDS.get(code)
-    move_tool = resolve_motor_move_tool(available)
+    move_tool = resolve_named_tool(profile.get("move") or "self.motor.move", available)
+    if move_tool is None:
+        move_tool = resolve_motor_move_tool(available)
 
     if move_tool and speeds is not None and step.duration_sec > 0:
         left, right = speeds
@@ -522,6 +704,8 @@ def format_move_step(step: RobotMoveStep) -> str:
         return step.code
     if step.code == "s" or step.duration_sec <= 0:
         return step.code
+    if step.steps:
+        return f"{step.code}:steps={step.steps}"
     return f"{step.code}:{step.duration_sec}"
 
 

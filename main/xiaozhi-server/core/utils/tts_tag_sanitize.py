@@ -11,6 +11,8 @@ _TRAILING_PARTIAL_CONTROL_RE = re.compile(
     r"\s+wx\s*:.*|"
     r"\s+tof\s*:?\s*cal(?:\s*:?\s*\d{0,4})?|"
     r"\s+mv\s*:.*|"
+    r"\s+pst\s*:.*|"
+    r"\s+srv\s*:.*|"
     r"\s+mem\s*:.*|"
     r"\s+char\s*:?\s*\w*|"
     r"\s+vpr\s*:.*|"    r"\s+locale\s*\[?\s*[:=]\s*\w*\]?|"    r"\s+story\s*:\s*(?:no|refuse)?|"    r"\s+sleep\s*"
@@ -24,7 +26,7 @@ _TRAILING_AT_PARAM_RE = re.compile(
 )
 # Fast reject before running strip passes / dispatch scans on plain LLM tokens.
 _CONTROL_TAG_MARKER_RE = re.compile(
-    r"(?:\b(?:vol|wx|tof|mv|mem|char|vpr)\s*:|\blocale\b|\bsleep\b|\bstory\s*:\s*(?:no|refuse)|@)",
+    r"(?:\b(?:vol|wx|tof|mv|pst|srv|mem|char|vpr)\s*:|\blocale\b|\bsleep\b|\bstory\s*:\s*(?:no|refuse)|@)",
     re.IGNORECASE,
 )
 
@@ -59,6 +61,8 @@ def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:
     from core.utils.character_switch_codec import strip_char_tags
     from core.utils.memory_tag_codec import strip_mem_tags
     from core.utils.robot_move_codec import strip_move_tags
+    from core.utils.robot_posture_codec import strip_posture_tags
+    from core.utils.servo_tag_codec import strip_servo_tags
     from core.utils.sleep_tag_codec import strip_sleep_tag
     from core.utils.tof_tag_codec import strip_tof_tags
     from core.utils.voiceprint_tag_codec import strip_vpr_tags
@@ -69,6 +73,8 @@ def strip_control_tags_for_tts(text: str, *, trim_edges: bool = True) -> str:
     cleaned = text
     for strip_fn in (
         strip_move_tags,
+        strip_posture_tags,
+        strip_servo_tags,
         strip_vol_tags,
         strip_wx_tags,
         strip_tof_tags,

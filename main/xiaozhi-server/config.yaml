@@ -125,6 +125,15 @@ robot_move_default_duration_seconds: 5
 robot_move_max_duration_seconds: 30
 robot_move_max_sequence: 5
 
+# Blue V4 spider robot — posture tags (LLM appends `pst:*` at end of reply, stripped before TTS).
+#   pst:std | pst:sit | pst:lt[:deg] | pst:rt[:deg] | pst:fw[:deg] | pst:bw[:deg]
+#   std = đứng (stand), sit = ngồi, lt/rt = nghiêng trái/phải, fw/bw = nghiêng trước/sau.
+#   deg optional, 5..20 (default 12) — device clamps to +-20.
+# Device MCP: self.gait.stand / self.gait.sit / self.gait.body {pitch_deg,roll_deg}.
+# The server never falls back to other tools: if the device lacks them the tag is dropped.
+robot_posture:
+  enable: false
+
 # INMP441 on Blue V2 — reject tap/knock; require real speech duration.
 speech_filter:
   min_rms: 80

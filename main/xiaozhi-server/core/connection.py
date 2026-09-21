@@ -749,6 +749,56 @@ class ConnectionHandler:
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"实例化组件失败: {e}")
 
+    def _robot_move_duration_prompt_note(self) -> str:
+        """Config-driven move-duration policy, appended at the END of the system prompt.
+
+        Kept out of the static character prompts so the numbers have a single source of
+        truth (robot_move_default_duration_seconds / robot_move_max_duration_seconds) and
+        sit where instruction-following is strongest.
+        """
+        default_sec = self._robot_move_default_duration()
+        max_sec = self._robot_move_max_duration()
+        if str(getattr(self, "active_locale", None) or "vi").lower() == "en":
+            lines = [
+                "<duration_policy>",
+                f"MOVE DURATION: default {default_sec} s when you omit `:<N>`; maximum "
+                f"{max_sec} s. When the user asks for another time (e.g. \"go forward 10 "
+                "seconds\") use their value (`mv:f:10`). `mv:s` (stop) ignores duration.",
+            ]
+            if self._robot_has_gait():
+                lines.append(
+                    "MOVE STEPS: when the user counts steps (\"go forward 3 steps\"), use "
+                    "`mv:<code>:steps=<N>` — 1 step = one full gait cycle = all four legs "
+                    "lift-and-plant once (max 8). Example: `mv:f:steps=3`."
+                )
+            lines.append("</duration_policy>")
+            return "\n".join(lines)
+        lines = [
+            "<duration_policy>",
+            f"THỜI GIAN DI CHUYỂN: mặc định {default_sec} giây khi bạn không ghi `:<N>`; "
+            f"tối đa {max_sec} giây. Nếu người dùng nói thời gian khác (vd \"đi tới 10 "
+            "giây\") thì theo người dùng (`mv:f:10`). `mv:s` (dừng) không tính thời gian.",
+        ]
+        if self._robot_has_gait():
+            lines.append(
+                "SỐ BƯỚC: khi người dùng đếm bước (\"đi tới 3 bước\", \"tiến 2 bước\"), dùng "
+                "`mv:<code>:steps=<N>` — 1 bước = 1 chu kỳ đầy đủ = cả 4 chân nhấc-hạ một lần "
+                "(tối đa 8). Ví dụ: `mv:f:steps=3`."
+            )
+        lines.append("</duration_policy>")
+        return "\n".join(lines)
+
+    def _robot_has_gait(self) -> bool:
+        """Thiết bị hiện tại là robot chân? (board tự khai qua MCP serverInfo)."""
+        from core.utils.robot_move_codec import board_has_gait
+
+        board = getattr(self, "device_board", None)
+        if board:
+            return board_has_gait(board)
+        # Board chưa khai báo → suy ra từ tool có trên thiết bị.
+        available = self._robot_move_available_tools()
+        return "self.gait.walk" in available and "self.gait.turn" in available
+
     def _init_prompt_enhancement(self):
         from core.characters.character_registry import get_operational_prompt
 
@@ -768,8 +818,12 @@ class ConnectionHandler:
             locale=getattr(self, "active_locale", "vi"),
             memory_scope=self._memory_scope(),
         )
+        note = self._robot_move_duration_prompt_note()
+        if enhanced_prompt and note:
+            enhanced_prompt = f"{enhanced_prompt}\n\n{note}"
         if enhanced_prompt:
             self.change_system_prompt(enhanced_prompt)
+            self._dump_llm_debug("system_prompt", enhanced_prompt)
             self.logger.bind(tag=TAG).debug("系统提示词已增强更新")
 
     def _robot_move_available_tools(self) -> set[str]:
@@ -817,6 +871,39 @@ class ConnectionHandler:
         if isinstance(block, dict):
             return bool(block.get("allow_inference", False))
         return bool(self.config.get("robot_move_allow_inference", False))
+
+    def _robot_move_gait_step_ms(self) -> int:
+        """step_ms gửi kèm self.gait.walk / self.gait.turn (lớn hơn = chậm và êm hơn)."""
+        from core.utils.robot_move_codec import (
+            DEFAULT_CRAWL_STEP_MS,
+            set_default_crawl_step_ms,
+        )
+
+        try:
+            value = int(self.config.get("robot_move_gait_step_ms", DEFAULT_CRAWL_STEP_MS))
+        except (TypeError, ValueError):
+            value = DEFAULT_CRAWL_STEP_MS
+        value = max(200, min(value, 6000))
+        # Giữ quy đổi "giây → bước" của codec khớp tốc độ đang dùng.
+        set_default_crawl_step_ms(value)
+        return value
+
+    def _robot_move_gait_tuning(self) -> dict:
+        """Tham số gait lấy từ config — chỉnh hướng/biên độ/tốc độ không cần nạp firmware."""
+        def _int(key: str, default: int, lo: int, hi: int) -> int:
+            try:
+                value = int(self.config.get(key, default))
+            except (TypeError, ValueError):
+                value = default
+            return max(lo, min(value, hi))
+
+        sign = _int("robot_move_gait_forward_sign", 1, -1, 1)
+        return {
+            "step_ms": self._robot_move_gait_step_ms(),
+            "hip_deg": _int("robot_move_gait_hip_deg", 0, 0, 170),
+            "knee_deg": _int("robot_move_gait_knee_deg", 0, 0, 90),
+            "forward_sign": -1 if sign < 0 else 1,
+        }
 
     def _shutdown_robot_moves(self) -> None:
         """Cancel pending motor timers and drop queued moves on disconnect/shutdown."""
@@ -1395,6 +1482,17 @@ class ConnectionHandler:
                 self._robot_move_sequence_queue.append(key)
         self._pump_robot_move_queue()
 
+        pending_posture = getattr(self, "_pending_posture_steps", None)
+        if pending_posture:
+            self._pending_posture_steps = None
+            sid, steps = pending_posture
+            self._dispatch_posture_steps(sid, steps)
+
+        pending_servo = getattr(self, "_pending_servo_commands", None)
+        if pending_servo:
+            self._pending_servo_commands = None
+            self._dispatch_servo_commands(pending_servo, label="flush")
+
     def _enqueue_robot_move_steps(
         self, sentence_id: str | None, steps: list
     ) -> list:
@@ -1407,7 +1505,7 @@ class ConnectionHandler:
         for step in steps:
             if not isinstance(step, RobotMoveStep):
                 step = RobotMoveStep(code=str(step), duration_sec=self._robot_move_default_duration())
-            key = (sentence_id, step.code, step.duration_sec, step.song)
+            key = (sentence_id, step.code, step.duration_sec, step.song, step.steps)
             if key in self._executed_robot_moves:
                 continue
             if key in pending_keys:
@@ -1454,12 +1552,22 @@ class ConnectionHandler:
             self._schedule_robot_move_pump(delay_s=remaining)
             return
         item = self._robot_move_sequence_queue.pop(0)
-        if len(item) >= 4:
+        if len(item) >= 5:
+            sentence_id, code, duration_sec, song, mv_steps = (
+                item[0],
+                item[1],
+                item[2],
+                item[3],
+                item[4],
+            )
+        elif len(item) >= 4:
             sentence_id, code, duration_sec, song = item[0], item[1], item[2], item[3]
+            mv_steps = None
         else:
             sentence_id, code, duration_sec = item[0], item[1], item[2]
             song = None
-        self._execute_robot_move(sentence_id, code, duration_sec, song=song)
+            mv_steps = None
+        self._execute_robot_move(sentence_id, code, duration_sec, song=song, steps=mv_steps)
 
     def _schedule_robot_move_pump(self, delay_s: float | None = None) -> None:
         if getattr(self, "_robot_move_shutdown", False):
@@ -1531,25 +1639,40 @@ class ConnectionHandler:
         normalized: list[RobotMoveStep] = []
         for step in steps:
             if isinstance(step, RobotMoveStep):
-                duration = (
-                    0
-                    if step.code == "s"
-                    else clamp_duration(
+                if step.code == "s":
+                    duration = 0
+                elif step.steps:
+                    # Thời gian suy ra từ SỐ BƯỚC (không phải người dùng yêu cầu "giây")
+                    # nên KHÔNG áp trần max_sec — 5 bước ≈ 38 s > trần 30 s.
+                    duration = max(1, int(step.duration_sec))
+                else:
+                    duration = clamp_duration(
                         step.duration_sec,
                         default_sec=default_sec,
                         max_sec=max_sec,
                     )
+                normalized.append(
+                    RobotMoveStep(
+                        code=step.code,
+                        duration_sec=duration,
+                        song=step.song,
+                        steps=step.steps,
+                    )
                 )
-                normalized.append(RobotMoveStep(code=step.code, duration_sec=duration, song=step.song))
             elif isinstance(step, (list, tuple)) and len(step) >= 2:
                 code, dur = step[0], step[1]
                 song = step[2] if len(step) >= 3 else None
+                mv_steps = step[3] if len(step) >= 4 else None
                 duration = (
                     0
                     if code == "s"
                     else clamp_duration(dur, default_sec=default_sec, max_sec=max_sec)
                 )
-                normalized.append(RobotMoveStep(code=str(code), duration_sec=duration, song=song))
+                normalized.append(
+                    RobotMoveStep(
+                        code=str(code), duration_sec=duration, song=song, steps=mv_steps
+                    )
+                )
             else:
                 code = str(step)
                 duration = 0 if code == "s" else default_sec
@@ -1576,7 +1699,7 @@ class ConnectionHandler:
                 self._pending_robot_moves = []
             queued = []
             for step in normalized:
-                key = (sentence_id, step.code, step.duration_sec, step.song)
+                key = (sentence_id, step.code, step.duration_sec, step.song, step.steps)
                 if key in self._executed_robot_moves:
                     continue
                 if key in self._pending_robot_moves:
@@ -1624,6 +1747,209 @@ class ConnectionHandler:
                 for c in codes
             ]
         self._dispatch_robot_move_steps(sentence_id, steps)
+
+    # ---------------- posture tags (pst:*) -------------
+
+    def _robot_posture_enabled(self) -> bool:
+        from core.utils.robot_posture_codec import posture_enabled
+
+        return posture_enabled(getattr(self, "config", None))
+
+    def _dispatch_posture_from_assistant_text(
+        self,
+        sentence_id: str | None,
+        text: str,
+        *,
+        label: str = "posture",
+        defer_post_tts: bool = True,
+    ) -> None:
+        """Parse pst:* tags from assistant text and queue the device posture calls."""
+        from core.utils.robot_posture_codec import extract_posture_steps, format_posture_step
+
+        if not text or not self._robot_posture_enabled():
+            return
+        steps = extract_posture_steps(text)
+        if not steps:
+            return
+        self.logger.bind(tag=TAG).info(
+            f"[pst] tags from {label}: " + ", ".join(format_posture_step(s) for s in steps)
+        )
+        self._dispatch_posture_steps(sentence_id, steps, defer_post_tts=defer_post_tts)
+
+    def _dispatch_posture_steps(
+        self,
+        sentence_id: str | None,
+        steps: list,
+        *,
+        defer_post_tts: bool = False,
+    ) -> None:
+        if not steps or not self._robot_posture_enabled():
+            return
+        if defer_post_tts:
+            self._schedule_post_tts_action(
+                f"pst_steps:{sentence_id}",
+                lambda sid=sentence_id, st=list(steps): self._dispatch_posture_steps(sid, st),
+            )
+            return
+
+        from core.utils.robot_posture_codec import build_posture_mcp_call, format_posture_step
+
+        handler = getattr(self, "func_handler", None)
+        if not handler or not getattr(handler, "finish_init", False):
+            # Device tool list not known yet — replay once the handler is ready.
+            self._pending_posture_steps = (sentence_id, list(steps))
+            self.logger.bind(tag=TAG).info("[pst] queued until func_handler is ready")
+            return
+
+        available = self._robot_move_available_tools()
+        loop = getattr(self, "loop", None)
+        if not hasattr(self, "_executed_postures"):
+            self._executed_postures = set()
+        for step in steps:
+            # Same tag can reappear in later stream chunks (the hold keeps it) — dispatch once.
+            dedupe_key = (sentence_id, step.code, step.deg)
+            if dedupe_key in self._executed_postures:
+                continue
+            # No server fallback: posture lives on the device (self.gait.*).
+            tool_name, tool_args = build_posture_mcp_call(step, available)
+            if not tool_name:
+                self.logger.bind(tag=TAG).warning(
+                    f"[pst] {format_posture_step(step)} — device has no gait tool, dropped"
+                )
+                continue
+            self._executed_postures.add(dedupe_key)
+            if loop is None:
+                self.logger.bind(tag=TAG).warning("[pst] event loop missing")
+                continue
+            args_json = json.dumps(tool_args, ensure_ascii=False)
+            self.logger.bind(tag=TAG).info(
+                f"[pst] dispatch {format_posture_step(step)} → {tool_name} args={args_json} "
+                f"sentence_id={sentence_id}"
+            )
+
+            def _on_pst_done(fut, pst_step=step, tool=tool_name) -> None:
+                try:
+                    result = fut.result()
+                    action = getattr(result, "action", None)
+                    payload = getattr(result, "result", None) or getattr(
+                        result, "response", None
+                    )
+                    self.logger.bind(tag=TAG).info(
+                        f"[pst] done {format_posture_step(pst_step)} → {tool} "
+                        f"action={action} result={payload}"
+                    )
+                except Exception as exc:
+                    self.logger.bind(tag=TAG).error(
+                        f"[pst] failed {format_posture_step(pst_step)} → {tool}: {exc}"
+                    )
+
+            future = asyncio.run_coroutine_threadsafe(
+                handler.handle_llm_function_call(
+                    self, {"name": tool_name, "arguments": args_json}
+                ),
+                loop,
+            )
+            future.add_done_callback(_on_pst_done)
+
+    def _robot_servo_tags_enabled(self) -> bool:
+        """Tag hiệu chuẩn servo (`srv:*`) — feature flag, mặc định TẮT."""
+        block = self.config.get("robot_servo_tags")
+        if isinstance(block, dict):
+            return bool(block.get("enable", False))
+        return False
+
+    def _dispatch_servo_from_assistant_text(
+        self,
+        text: str,
+        *,
+        label: str = "servo",
+        defer_post_tts: bool = True,
+    ) -> bool:
+        """Parse srv:* tags từ câu trả lời LLM → gọi tool self.servo.* sau TTS."""
+        from core.utils.servo_tag_codec import extract_servo_commands
+
+        if not text or not self._robot_servo_tags_enabled():
+            return False
+        commands = extract_servo_commands(text)
+        if not commands:
+            return False
+        self.logger.bind(tag=TAG).info(
+            f"[srv] tags from {label}: " + ", ".join(c.label() for c in commands)
+        )
+        self._dispatch_servo_commands(commands, defer_post_tts=defer_post_tts, label=label)
+        return True
+
+    def _dispatch_servo_commands(
+        self,
+        commands: list,
+        *,
+        defer_post_tts: bool = False,
+        label: str = "servo",
+    ) -> None:
+        if not commands or not self._robot_servo_tags_enabled():
+            return
+        if defer_post_tts:
+            self._schedule_post_tts_action(
+                f"srv_cmds:{label}",
+                lambda cmds=list(commands), l=label: self._dispatch_servo_commands(
+                    cmds, label=l
+                ),
+            )
+            return
+
+        from core.utils.servo_tag_codec import build_servo_mcp_call
+
+        handler = getattr(self, "func_handler", None)
+        if not handler or not getattr(handler, "finish_init", False):
+            self._pending_servo_commands = list(commands)
+            self.logger.bind(tag=TAG).info("[srv] queued until func_handler is ready")
+            return
+
+        available = self._robot_move_available_tools()
+        loop = getattr(self, "loop", None)
+        if not hasattr(self, "_executed_servo_cmds"):
+            self._executed_servo_cmds = set()
+        for cmd in commands:
+            dedupe_key = cmd.label()
+            if dedupe_key in self._executed_servo_cmds:
+                continue
+            # Không fallback: thiết bị không có tool tương ứng thì bỏ tag.
+            tool_name, tool_args = build_servo_mcp_call(cmd, available)
+            if not tool_name:
+                self.logger.bind(tag=TAG).warning(
+                    f"[srv] {cmd.label()} — thiết bị không có tool self.servo.*, bỏ qua"
+                )
+                continue
+            self._executed_servo_cmds.add(dedupe_key)
+            if loop is None:
+                self.logger.bind(tag=TAG).warning("[srv] event loop missing")
+                continue
+            args_json = json.dumps(tool_args, ensure_ascii=False)
+            self.logger.bind(tag=TAG).info(
+                f"[srv] dispatch {cmd.label()} → {tool_name} args={args_json}"
+            )
+
+            def _on_srv_done(fut, srv_cmd=cmd, tool=tool_name) -> None:
+                try:
+                    result = fut.result()
+                    payload = getattr(result, "result", None) or getattr(
+                        result, "response", None
+                    )
+                    self.logger.bind(tag=TAG).info(
+                        f"[srv] done {srv_cmd.label()} → {tool} result={payload}"
+                    )
+                except Exception as exc:
+                    self.logger.bind(tag=TAG).error(
+                        f"[srv] failed {srv_cmd.label()} → {tool}: {exc}"
+                    )
+
+            future = asyncio.run_coroutine_threadsafe(
+                handler.handle_llm_function_call(
+                    self, {"name": tool_name, "arguments": args_json}
+                ),
+                loop,
+            )
+            future.add_done_callback(_on_srv_done)
 
     async def _stream_dance_music(self, track: int, song_name: str | None = None) -> bool:
         """Stream music from ./music/ — search by song_name if specified, else preset/random."""
@@ -1741,7 +2067,12 @@ class ConnectionHandler:
         return merged
 
     def _execute_robot_move(
-        self, sentence_id: str | None, code: str, duration_sec: int = 0, song: str | None = None
+        self,
+        sentence_id: str | None,
+        code: str,
+        duration_sec: int = 0,
+        song: str | None = None,
+        steps: int | None = None,
     ) -> None:
         from core.utils.robot_move_codec import (
             RobotMoveStep,
@@ -1751,8 +2082,8 @@ class ConnectionHandler:
             is_dance_code,
         )
 
-        step = RobotMoveStep(code=code, duration_sec=duration_sec, song=song)
-        queue_item = (sentence_id, code, duration_sec, song)
+        step = RobotMoveStep(code=code, duration_sec=duration_sec, song=song, steps=steps)
+        queue_item = (sentence_id, code, duration_sec, song, steps)
 
         if getattr(self, "_robot_move_in_flight", False):
             self._robot_move_sequence_queue.insert(0, queue_item)
@@ -1764,7 +2095,7 @@ class ConnectionHandler:
         if not hasattr(self, "_executed_robot_moves"):
             self._executed_robot_moves = set()
 
-        dedupe_key = (sentence_id, code, duration_sec, song)
+        dedupe_key = (sentence_id, code, duration_sec, song, steps)
         if dedupe_key in self._executed_robot_moves:
             self.logger.bind(tag=TAG).debug(
                 f"[mv] skip duplicate mv:{format_move_step(step)} sentence_id={sentence_id}"
@@ -1782,7 +2113,11 @@ class ConnectionHandler:
             f"[mv] available tools={len(available)} motor/chassis={motor_tools}"
         )
 
-        tool_name, tool_args = build_mcp_call(step, available)
+        tool_name, tool_args = build_mcp_call(
+            step,
+            available,
+            board=getattr(self, "device_board", None),
+        )
         if not tool_name:
             self.logger.bind(tag=TAG).warning(
                 f"[mv] mv:{format_move_step(step)} — no MCP tool yet "
@@ -2017,6 +2352,23 @@ class ConnectionHandler:
             )
         )
 
+    def _dump_llm_debug(self, name: str, text: str | None) -> None:
+        """Dump the exact prompt / raw LLM reply to tmp/_llm_debug/<name>.txt.
+
+        Only when log_level is DEBUG — lets us reproduce an LLM reply (and the prompt
+        that produced it) offline instead of guessing from the sanitised dialogue.
+        """
+        try:
+            if str((self.config.get("log") or {}).get("log_level", "")).upper() != "DEBUG":
+                return
+            from pathlib import Path
+
+            d = Path("tmp") / "_llm_debug"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{name}.txt").write_text(text or "", encoding="utf-8")
+        except Exception:
+            pass
+
     def _enqueue_tts_stream_part(
         self, sentence_id: str | None, text: str, *, flush_hold: bool = False
     ) -> None:
@@ -2093,6 +2445,9 @@ class ConnectionHandler:
             pairs = [
                 ("Turn left", "Turning left now mv:t"),
                 ("Turn right", "Turning right mv:p"),
+                ("Go forward 3 steps", "Okie, going forward 3 steps mv:f:steps=3"),
+                ("Back up 2 steps", "Sure, backing up 2 steps mv:b:steps=2"),
+                ("Turn right 2 steps", "Okie, turning right 2 steps mv:p:steps=2"),
                 ("Dance for me", "Sure, dancing now mv:d"),
                 (
                     "Dance to Baby Shark",
@@ -2104,6 +2459,9 @@ class ConnectionHandler:
             pairs = [
                 ("Kita ơi quẹo trái đi", "Mình đi sang trái nha mv:t"),
                 ("Kita ơi quay phải đi", "Mình quay phải nha mv:p"),
+                ("Kita ơi đi tới 3 bước", "Dạ mình đi tới 3 bước nha mv:f:steps=3"),
+                ("Lùi lại 2 bước đi", "Okie, mình lùi 2 bước nha mv:b:steps=2"),
+                ("Quay phải 2 bước", "Okie, mình quay phải 2 bước nha mv:p:steps=2"),
                 ("Kita ơi nhảy đi", "Okie, mình nhảy nha mv:d"),
                 (
                     "Nhảy theo bài Baby Shark đi",
@@ -2712,8 +3070,24 @@ class ConnectionHandler:
 
         return resolve_memory_scope(getattr(self, "current_speaker", None))
 
+    def _dialogue_history_enabled(self) -> bool:
+        """Per-speaker persisted conversation history (load + save).
+
+        Disable with ``dialogue_history: {enable: false}``. Stored replies are kept
+        tag-stripped for TTS, so a long history teaches the LLM to answer without its
+        mv:*/pst:* tags — with a repeated user question the model just copies its own
+        earlier tag-less reply and the robot stops moving (reproduced with both
+        Gemini and DeepSeek).
+        """
+        block = self.config.get("dialogue_history")
+        if isinstance(block, dict):
+            return bool(block.get("enable", True))
+        return True
+
     def _dialogue_bucket(self) -> str | None:
         """Bucket key for the current speaker. None = don't segment (voiceprint off)."""
+        if not self._dialogue_history_enabled():
+            return None
         speaker = (getattr(self, "current_speaker", None) or "").strip()
         if not speaker:
             return None
@@ -2739,6 +3113,8 @@ class ConnectionHandler:
 
     def _ensure_user_context_loaded(self, bucket: str) -> None:
         """Load a speaker's persisted conversation from disk into memory if absent."""
+        if not self._dialogue_history_enabled():
+            return
         if bucket == _UNKNOWN_DIALOGUE_BUCKET:
             # Unrecognized voices are ephemeral — never load/persist context for them.
             return
@@ -2771,6 +3147,8 @@ class ConnectionHandler:
 
     def _schedule_user_context_save(self, bucket: str) -> None:
         """Async-save a speaker's conversation if it hasn't been saved for >2 min."""
+        if not self._dialogue_history_enabled():
+            return
         if not bucket or bucket == _UNKNOWN_DIALOGUE_BUCKET:
             # Unrecognized voices are ephemeral — never save context for them.
             return
@@ -3104,6 +3482,7 @@ class ConnectionHandler:
                 if content is not None and len(content) > 0:
                     if not tool_call_flag:
                         response_message.append(content)
+                        self._dump_llm_debug("llm_reply", "".join(response_message))
                         cleaned_part = self._clean_response_garbage(content)
                         if cleaned_part:
                             self._enqueue_tts_stream_part(
@@ -3270,13 +3649,23 @@ class ConnectionHandler:
 
         # 存储对话内容
         if len(response_message) > 0:
-            text_buff = "".join(response_message)
+            raw_assistant = "".join(response_message)
             text_buff = self._prepare_llm_text_for_tts(
-                current_sentence_id, text_buff, trim_edges=True
+                current_sentence_id, raw_assistant, trim_edges=True
             )
             if text_buff:
                 self.tts.store_tts_text(current_sentence_id, text_buff)
-                self.dialogue.put(Message(role="assistant", content=text_buff))
+                # History must keep the FULL reply (mv:*/pst:*/vol:* tags included).
+                # Storing the tag-stripped text taught the model to answer without the
+                # tag: with a long per-speaker history and a repeated user question the
+                # LLM simply copied its own earlier tag-less reply — the robot then
+                # never moved (reproduced for both Gemini and DeepSeek).
+                self.dialogue.put(
+                    Message(
+                        role="assistant",
+                        content=raw_assistant.strip() or text_buff,
+                    )
+                )
 
         if depth == 0:
             from core.characters.character_registry import get_active_character, get_store

@@ -29,6 +29,14 @@ chmod +x run-docker.sh
 ./run-docker.sh logs
 ```
 
+Updating server code (no image rebuild — avoids stale `<none>` images filling the Docker disk):
+
+```bash
+./run-docker.sh sync        # copy changed code into the running container + restart
+./run-docker.sh rebuild     # only when requirements.txt / Dockerfile change
+./run-docker.sh prune       # reclaim disk when old images pile up
+```
+
 Verify OTA from another machine on the LAN:
 
 ```bash

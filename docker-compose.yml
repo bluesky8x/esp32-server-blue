@@ -1,7 +1,9 @@
 # Blue xiaozhi-server stack for Ubuntu / Linux
 #
 # Server only:
-#   ./run-docker.sh up
+#   ./run-docker.sh up        # start, reusing the existing image (no rebuild)
+#   ./run-docker.sh sync      # after editing server code: copy files in + restart
+#   ./run-docker.sh rebuild   # only when requirements.txt / Dockerfile change
 #
 # Local TTS runs in a separate stack (configure url in data/.config.yaml):
 #   ./run-vieneu-tts.sh up    # VieNeu on :8882
