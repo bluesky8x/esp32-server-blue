@@ -162,14 +162,16 @@ def dispatch_control_tags_from_text(
     conn._dispatch_vol_from_assistant_text(
         text, label=label, defer_post_tts=defer_post_tts
     )
-    conn._dispatch_tof_from_assistant_text(
-        text, label=label, defer_post_tts=defer_post_tts
-    )
+    # `tof:clr` = XOÁ hiệu chuẩn; nếu có tag này thì KHÔNG chạy tof:cal cùng lượt (2 tag mâu thuẫn).
+    if not conn._dispatch_tof_clear_from_assistant_text(text, label=label):
+        conn._dispatch_tof_from_assistant_text(
+            text, label=label, defer_post_tts=defer_post_tts
+        )
     conn._dispatch_wx_from_assistant_text(
         text, label=label, defer_post_tts=defer_post_tts
     )
     conn._dispatch_servo_from_assistant_text(
-        text, label=label, defer_post_tts=defer_post_tts
+        text, label=label, sentence_id=sentence_id, defer_post_tts=defer_post_tts
     )
     if sentence_id is not None:
         conn._dispatch_mv_from_assistant_text(
@@ -336,7 +338,7 @@ def process_assistant_stream_chunk(
         conn._dispatch_posture_steps(sentence_id, posture_steps, defer_post_tts=True)
 
     if servo_commands and flush:
-        conn._dispatch_servo_commands(servo_commands, defer_post_tts=True)
+        conn._dispatch_servo_commands(servo_commands, defer_post_tts=True, sentence_id=sentence_id)
 
     spoken = strip_control_tags_for_tts(cleaned or "", trim_edges=flush)
     if not spoken or not spoken.strip():

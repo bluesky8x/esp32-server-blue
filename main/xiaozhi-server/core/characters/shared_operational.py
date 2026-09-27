@@ -45,8 +45,8 @@ The code is stripped before TTS — write your full natural sentence first, then
 | Code | Meaning |
 | mv:t | turn left |
 | mv:p | turn right |
-| mv:f | forward — go forward, move ahead |
-| mv:b | backward — go back, reverse |
+| mv:f | forward — go forward, move ahead, move toward/into the front |
+| mv:b | backward — go back, reverse, back away, move backward |
 | mv:c | circle — spin / drive in a circle (NOT forward) |
 | mv:d | dance — stream preset music from `./music/` + synced moves |
 | mv:d2 | dance 2 — hip-hop style (stream preset from server) |
@@ -62,6 +62,16 @@ Default and maximum come from the server's duration policy (see the end of this 
 **Steps (legged robots):** `mv:<code>:steps=<N>` — N = full gait cycles (all four legs lift and plant once), 1-8.
 Use it when the user counts steps (*"go forward 3 steps"*) and *also* say the count in the sentence:
 *"Okie, going forward 3 steps mv:f:steps=3"*. Never mix `steps=` with a second count.
+
+**🚨 CRITICAL — a MOVE request MUST carry a tag:** any wording that makes the robot move — even
+phrasings you find unusual, and any language (*"đi về trước"*, *"về phía trước"*, *"ra phía trước"*,
+*"nhích lên"*, *"bước tới"*, *"lùi lại"*, *"đi về sau"*…) — when you confirm you will do it, the
+reply **MUST end with `mv:<right direction>`**. Confirming without the tag = the robot STANDS STILL =
+a FAILED reply. Never decide that a sentence "is not a move command" — if the user talks about the
+robot moving, it IS one.
+When the user counts **STEPS** (also spelled out in words), you MUST add `:steps=<N>` in that same
+reply, converting the spoken number to a digit. Example: *"Bạn hãy đi về trước năm bước"* →
+`mv:f:steps=5`; *"back up two steps"* → `mv:b:steps=2`.
 
 **Specific Song Parameter:** When the user asks to dance to a **specific song/artist**, you **must append `:song=<Song Title>`** to the dance tag:
 - General dance request (*"dance for me"*, *"dance again"*): `mv:d` or `mv:d2` or `mv:d3`
@@ -136,8 +146,8 @@ The code is stripped before TTS — write your full natural sentence first, then
 | Code | Meaning |
 | mv:t | turn left — qua trái, sang trái, rẽ trái, quay trái |
 | mv:p | turn right — qua phải, sang phải, rẽ phải, quay phải |
-| mv:f | forward — đi tới, tiến, đi thẳng, đi lên |
-| mv:b | backward — lùi, đi lùi |
+| mv:f | forward — đi tới, tiến, đi thẳng, đi lên, **đi về trước**, **về phía trước**, **ra phía trước**, **bước tới** |
+| mv:b | backward — lùi, đi lùi, **lùi lại**, **đi về sau**, **ra sau** |
 | mv:c | circle — đi vòng vòng, quay vòng (NOT forward) |
 | mv:d | dance — stream nhạc mặc định `./music/` + nhảy theo EQ |
 | mv:d2 | dance 2 — hip-hop (stream từ server) |
@@ -154,6 +164,16 @@ Mặc định và tối đa theo "duration policy" của server (xem cuối prom
 Dùng khi người dùng đếm bước (*"đi tới 3 bước"*) và nhắc lại số bước trong câu:
 *"Dạ mình đi tới 3 bước nha mv:f:steps=3"*. Không trộn `steps=` với một con số thứ hai.
 
+**🚨 QUAN TRỌNG — câu yêu cầu DI CHUYỂN = BẮT BUỘC có tag:** Bất kỳ cách nói nào khiến robot
+phải nhích/di chuyển — kể cả những cách nói bạn cho là lạ (*"đi về trước"*, *"đi về phía trước"*,
+*"ra phía trước"*, *"nhích lên"*, *"bước tới"*, *"lùi lại"*, *"đi về sau"*, *"ra sau"*…) — khi bạn
+xác nhận sẽ làm thì câu trả lời **PHẢI kết thúc bằng `mv:<hướng đúng>`**. Xác nhận mà THIẾU tag =
+robot ĐỨNG YÊN = câu trả lời THẤT BẠI. Đừng tự phán đoán rằng câu nói đó "không phải lệnh" — nếu
+người dùng nói về việc robot đi thì đó LÀ lệnh.
+Nếu người dùng đếm **SỐ BƯỚC** (kể cả đọc bằng chữ: *"năm bước"*, *"ba bước"*), bạn PHẢI ghi
+`:steps=<số>` (một=1, hai=2, ba=3, bốn=4, năm=5, sáu=6, bảy=7, tám=8).
+Ví dụ: *"Bạn hãy đi về trước năm bước"* → `mv:f:steps=5`; *"lùi lại hai bước"* → `mv:b:steps=2`.
+
 **Tham số tên bài hát (Song Parameter):** Khi người dùng yêu cầu nhảy theo một **bài hát cụ thể**, bạn **phải thêm `:song=<Tên bài hát>`** vào thẻ nhảy:
 - Yêu cầu nhảy chung chung (*"nhảy đi"*, *"nhảy nữa đi"*, *"bạn hãy nhảy nữa"*, *"nhảy coi"*): `mv:d` hoặc `mv:d2` hoặc `mv:d3`
 - Nhảy theo bài hát cụ thể (*"nhảy bài Shape of You"*, *"nhảy theo bài Đồi Hoa Mặt Trời"*): `mv:d:song=Đồi Hoa Mặt Trời`
@@ -167,6 +187,8 @@ Kể cả khi bạn không chắc chắn tên bài hoặc người dùng nói sa
 |---------|-----|
 | Forward 30 s | `mv:f:30` |
 | Đi tới 3 bước | `mv:f:steps=3` |
+| Đi về trước 5 bước ("đi về phía trước", "ra phía trước", "bước tới") | `mv:f:steps=5` |
+| Đi về sau 2 bước ("lùi lại", "ra sau") | `mv:b:steps=2` |
 | Circle / đi vòng vòng 10 s | `mv:c:10` |
 | Nhảy dance 1 (nhạc mặc định) | `mv:d` hoặc `mv:ld` |
 | Nhảy theo bài hát cụ thể | `mv:d:song=Đồi Hoa Mặt Trời` |
@@ -198,6 +220,83 @@ When you **confirm** you will move, you **must** append the matching `mv:*` — 
 2. Nếu CÓ — câu trả lời của mình có kết thúc bằng đúng `mv:*` tag không?
 3. Nếu mình nói "mình nhảy bài <tên bài>" — đã có `mv:d:song=<tên bài>` ở cuối chưa?
 Nếu bất kỳ câu nào là KHÔNG, hãy thêm tag trước khi trả lời. KHÔNG BAO GIỜ xác nhận nhảy/di chuyển mà thiếu tag."""
+
+
+def posture_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") -> str:
+    """pst:* posture tags (stand / sit / tilt) — wired like mv:*.
+
+    Trước đây `pst:*` có codec + dispatch nhưng KHÔNG có mục prompt nào dạy LLM, nên khi
+    người dùng nói "ngồi xuống" thì model trả lời "mình chưa có động tác ngồi xuống trong bộ
+    điều khiển" — robot có tool self.gait.sit nhưng LLM không biết là nó dùng được.
+    """
+    loc = normalize_operational_locale(locale)
+    if loc == "en":
+        good_examples = (
+            '✅ Good: *"Okie, sitting down now pst:sit"*',
+            '✅ Good: *"Standing up pst:std"*',
+            '✅ Good: *"Tilting to the left a bit pst:lt:15"*',
+        )
+        examples_block = "\n".join(good_examples)
+        return f"""## Body posture tags (Blue robot legs)
+When the user asks the robot to change its **posture** (not to walk/drive), you **MUST append** the matching `pst:<code>` tag at the **very end** of the reply — the server calls the device tool for you.
+The tag is stripped before TTS: write the full natural sentence first, then the code last.
+
+| Code | Meaning | User says |
+| pst:sit | sit down | "ngồi xuống", "ngồi đi", "sit down", "take a rest" |
+| pst:std | stand up | "đứng lên", "đứng dậy", "đứng thẳng", "stand up", "get up" |
+| pst:lt | tilt left (roll +) | "nghiêng sang trái", "lean left" |
+| pst:rt | tilt right (roll -) | "nghiêng sang phải", "lean right" |
+| pst:fw | tilt forward (pitch +) | "chúi về trước", "cúi xuống", "lean forward" |
+| pst:bw | tilt back (pitch -) | "ngửa ra sau", "lean back" |
+
+**Tilt amount (optional):** append ``:<deg>`` (1-20, default 10) → `pst:lt:15`. `pst:sit` / `pst:std` never take a number.
+
+**Format:** `<natural sentence> pst:<code>[:<deg>]` — always at the **very end**. Multiple postures in order: `pst:sit pst:bw`.
+
+{examples_block}
+❌ Bad: *"Sorry, I don't have a sit-down move in my controller"* — the robot DOES have it, the tag was missing
+❌ Bad: *"Okie, I'm sitting down"* (no `pst:sit` — the robot never moves)
+❌ Bad: *"I'll sit pst:sit and then relax"* (code in the middle)
+
+Only append a posture code when the user clearly asks for a posture. No code for normal chat.
+**Self-check:** if the user asked for a posture and your reply confirms it, does it END with the matching `pst:*` tag? If not, add it before replying."""
+
+    if example_tone == "lili":
+        good_examples = (
+            '✅ Good: *"Okie, mình ngồi xuống nha pst:sit"*',
+            '✅ Good: *"Dạ mình đứng lên đây pst:std"*',
+            '✅ Good: *"Mình nghiêng sang trái chút nha pst:lt:15"*',
+        )
+    else:
+        good_examples = (
+            '✅ Good: *"Okie, mình ngồi xuống đây pst:sit"*',
+            '✅ Good: *"Rồi, mình đứng lên nha pst:std"*',
+            '✅ Good: *"Mình nghiêng sang trái chút nha pst:lt:15"*',
+        )
+    examples_block = "\n".join(good_examples)
+    return f"""## Tư thế thân (posture tags — Blue robot legs)
+Khi người dùng yêu cầu robot đổi **tư thế** (không phải đi/di chuyển), bạn **PHẢI gắn** tag `pst:<code>` ở **cuối cùng** câu trả lời — server sẽ tự gọi tool thiết bị.
+Tag bị strip trước TTS: viết câu nói tự nhiên trước, tag để cuối.
+
+| Code | Nghĩa | Người dùng nói |
+| pst:sit | ngồi xuống (gập chân, hạ thân) | "ngồi xuống", "ngồi đi", "ngồi nghỉ", "sit down" |
+| pst:std | đứng lên | "đứng lên", "đứng dậy", "đứng thẳng", "stand up" |
+| pst:lt | nghiêng sang trái (roll +) | "nghiêng sang trái", "nghiêng người qua trái" |
+| pst:rt | nghiêng sang phải (roll -) | "nghiêng sang phải", "nghiêng người qua phải" |
+| pst:fw | chúi về trước (pitch +) | "chúi về trước", "cúi xuống", "chồm tới" |
+| pst:bw | ngửa ra sau (pitch -) | "ngửa ra sau", "ngả người về sau" |
+
+**Số độ (tuỳ chọn):** thêm ``:<deg>`` (1-20, mặc định 10) → `pst:lt:15`. `pst:sit` / `pst:std` KHÔNG cần số.
+
+**Format:** `<câu nói tự nhiên> pst:<code>[:<deg>]` — luôn ở **cuối cùng**. Nhiều tư thế liên tiếp: `pst:sit pst:bw`.
+
+{examples_block}
+❌ Sai: *"Mình chưa có động tác ngồi xuống trong bộ điều khiển nè"* — robot CÓ tư thế này, chỉ thiếu tag
+❌ Sai: *"Okie, mình ngồi xuống nha"* (thiếu `pst:sit` — robot không đổi gì)
+❌ Sai: *"Mình ngồi pst:sit rồi nghỉ nha"* (tag ở giữa câu)
+
+Chỉ gắn tag khi người dùng yêu cầu rõ ràng một tư thế. Không gắn cho câu chuyện bình thường.
+**Tự kiểm tra:** nếu người dùng yêu cầu tư thế và câu trả lời của bạn xác nhận, câu đó có KẾT THÚC bằng đúng tag `pst:*` chưa? Nếu chưa, thêm vào trước khi trả lời."""
 
 
 def weather_tags_prompt(*, example_tone: str = "kira", locale: str = "vi") -> str:
@@ -326,6 +425,7 @@ The user ALREADY placed the robot where they want (open floor ahead, stable) bef
 |------|-----|
 | User requests calibration (any wording) | `tof:cal` (device auto — median reading) |
 | Rare: fixed target | `tof:cal:<mm>` only if user measured exact distance |
+| User wants to DROP the saved calibration ("clear calibration", "reset the sensor") | `tof:clr` (deletes it from NVS; the guard falls back to the config thresholds) |
 
 Calibration runs shortly after your TTS (the device reads its own sensor) — no extra placement step.
 
@@ -343,6 +443,7 @@ Người dùng ĐÃ đặt robot đúng chỗ (sàn trống, đứng yên) trư�
 |---------|-----|
 | User yêu cầu hiệu chuẩn (bất kỳ cách nói nào) | `tof:cal` (robot tự đọc & lưu) |
 | Hiếm: đích cố định | `tof:cal:<mm>` chỉ khi user đo chính xác |
+| User muốn XOÁ hiệu chuẩn ("xoá hiệu chuẩn", "reset cảm biến") | `tof:clr` (xoá trong NVS ⇒ guard quay lại ngưỡng trong config.h) |
 
 Hiệu chuẩn chạy ngay sau TTS (robot tự đọc cảm biến) — không cần bước đặt robot riêng.
 
@@ -739,9 +840,42 @@ When the user asks to calibrate / fix the servos, append EXACTLY ONE `srv:` tag 
 |---|---|
 | "set the servo pulse range 1000 to 2000 microseconds", "servos only tick, they don't turn" | `srv:range=1000-2000` |
 | "servo 2 is off by -3 degrees" | `srv:trim=2:-3` |
+| "leg 2 turns the wrong way" / "leg 2 turns the right way again" | `srv:invert=2:1` / `srv:invert=2:0` |
 | "leg 2 turns the wrong way" | `srv:invert=2:1` |
 | "test servo 0 at 1200 microseconds" | `srv:raw=0:1200` |
+| "walk with the direct step style" / "go back to the arc step" | `srv:swing=direct` / `srv:swing=arc` |
+| "test leg 2", "test leg number 2", "test one leg 3" | `srv:leg=2` / `srv:leg=3` (0=front-left, 1=front-right, 2=rear-left, 3=rear-right) |
+| "test the travel of servo 0", "sweep servo 0 from 0 to 180", "servo 0 full range" | `srv:travel=0` (several joints: `srv:travel=0,1,2`) |
+| "wave hello", "wave at me", "say hi with your leg", "wave 8 times" | `srv:wave` (front-right knee goes up to 170°, back down to 110°, 5 cycles). Change the count with `srv:wave=1:8` (leg 1, 8 times); another leg: `srv:wave=0` / `2` / `3` |
+| "do a dance" (no music playing), "bounce to a beat" | `srv:dance` (4-leg beat dance, one full-body move per beat; `srv:dance=DgvDf` picks the pattern: D=deep bounce, b=soft, c=low crouch, g=sway, f=nod, v=stomp, l=tilt left, r=tilt right, p=bow forward, n=lean back, **w=wave a front leg then keep bouncing through that segment**, **s=walk 3 steps forward then keep bouncing through that segment**) |
+| "dance to music", "put on music and dance" | the `mv:d` / `mv:d2` / `mv:d3` codes (the server streams `./music/` and sends the EQ timeline to `self.motor.dance`) |
+| "30% faster", "go faster", "slow down 30%", "back to normal speed", "what speed are you at" | `srv:speed=+30` / `srv:speed=-30` / `srv:speed=100` / `srv:speed` (`+/-` is RELATIVE to the value already in use; `srv:speed=130` sets it absolutely) |
+| "the screen is sideways", "the face is rotated / upside down", "rotate the screen back", "turn the display 90 degrees" | `srv:rot=90` (screen orientation `0` / `90` / `180` / `270`). The panel is square 240×240, so layout and CPU cost do NOT change and the whole GIF face follows automatically; the firmware also applies the GRAM offset that angle needs (90 and 180 must compensate 80 px, otherwise the image is shifted and cropped by 1/4). If the face is still sideways or mirrored, try `srv:rot=270`. If it is only OFFSET/cropped, fine-tune the compensation: `srv:rot=90:80:0` (deg:offset_x:offset_y, px). `srv:rot` alone reads the angle in use. NOT saved across reboots: once the right values are known they are baked into `config.h` (`DISPLAY_ROTATION` / `DISPLAY_GRAM_ROW_GAP`). |
+| "read the servo status", "check the servos", "what angle is servo 0 at" | `srv:status` |
+
+**⚠️ ASR mishears "servo"** — "**server** status", "check the **server**", "**sir-vo**", "**serve-o**", "**sev-ro**"… are almost certainly **servo**. Never answer "I can't read the server status": treat those as a servo question, reply briefly, and append `srv:status` (or the matching `srv:` tag) at the end.
+
+**Speed (`srv:speed`):** the number is a percentage of the default speed (100 = default), clamped to 50-200% and NOT saved across reboots. `srv:speed=+30` is **relative to the value already in use**, so repeated requests stack (100% → 130% → 160% → …). Use the **absolute** form (`srv:speed=130`) when the user names a concrete target. The device answers with `speed_pct`: when you get that tool result back, **do not stay silent — say the resulting percentage in one short sentence** (e.g. "tốc độ hiện tại là 190 phần trăm"). Values above ~150% draw much more current (5 V/2 A servo rail) and can brown out — mention that if the value ends up high.
+| "read the crouch calibration", "how deep can it sit" | `srv:cal` (reads alpha / tibia / body offset / standing height / floor-contact fold) |
+| "hold a 20 degree knee fold so I can measure" | `srv:cal=20` (all four knees fold +20° and HOLD) |
+| "the standing height is 30 mm" (bottom of the body above the floor) | `srv:cal=0:30` (records the standing height; this also re-pins the body offset) |
+| the user reports "20 degrees gave 14 mm" (height above the floor) | `srv:cal=20:14` (record the measured height) |
+| "clear the crouch calibration", "reset the geometry" | `srv:cal=reset` (back to the config.h defaults) |
+
+**Pulse band = gain:** `srv:range` rescales EVERY motion of the robot. `500-2500` (the default, the MG90S datasheet band) makes 0..180° commanded = 0..180° physical; a narrower band such as `1000-2000` makes every motion only **half** the physical size. Change it only when the user asks, and mention that all motion amplitudes change with it.
+
+**Crouch calibration (`srv:cal`):** the model is fitted from the **body height above the floor** measured with a ruler — the reported number is that HEIGHT, not "how far it dropped". Procedure: (1) append `srv:cal=F` so the knees fold +F° and HOLD; (2) ask the user to measure the height from the floor to the bottom of the body; (3) when the user reports "F degrees gave H mm", the reply **MUST** end with `srv:cal=F:H`. Two points are enough — the firmware fits α and L, saves them to NVS and returns the result. Never invent the numbers yourself. **Use two folds ≥10° apart and both ≤25°** (10° and 20° are ideal): the body already rests on the floor at a fold of ≈35°, and folding further only flips the legs up instead of lowering the body. Expected heights with the default geometry: standing **30 mm**, 10° → **22 mm**, 20° → **14 mm**. Recording the standing height too (`srv:cal=0:30`) re-pins the body offset. A reported height of 0 mm means the body is already on the floor — ask for a smaller fold, and never record it as a point. `srv:cal=reset` restores the defaults.
+
+**🚨 REQUIRED — travel test:** when the user says *"test the travel of servo N"*, *"sweep servo N 0 to 180"*, *"run servo N full range"* (N = 0..7), the reply **MUST** end with `srv:travel=N`: the joint runs 0° → 180° → 0° (the whole 500-2500 µs pulse band) for two laps and **returns to the neutral 90° stand position**. Optional small variant `srv:travel=N:small` sweeps only ±20° around neutral — use it when the user wants to WATCH the foot direction: with the current geometry (knee α=43.3°, tibia L=55 mm) a +20° knee fold lifts the foot ~16 mm off the floor and pushes it ~10 mm outward.
+✅ *"Okie, running servo 0 through its full travel now srv:travel=0"*
+❌ *"Okie, running servo 0 through its full travel now"* — no tag, so nothing moves
+
+**🚨 REQUIRED — single-leg test:** when the user says *"test leg N"*, *"test leg number N"* or *"test one leg N"* (N = 0..3), the reply **MUST** end with `srv:leg=N`. Confirming without the tag means NOTHING happens (most common mistake).
+✅ *"Okie, testing leg 2 now srv:leg=2"*
+❌ *"Okie, testing leg 2 now"* — no tag, so nothing runs
 | "relax the servos" / "energise the servos again" | `srv:relax` / `srv:enable` |
+| "no servo moves at all", "test the OE pin", "check the servo power/enable" | `srv:oe` (toggles the PCA9685 `OE#` enable pin a few times so a multimeter at the module's OE pin can see it: 0 V = outputs ON, 3.3 V = outputs OFF. Use it when V+ is present but every servo is limp. `srv:oe=5` = 5 toggles) |
+| "servo 0 is stuck at the middle", "drive servo 0 to 1200 us" | `srv:raw=0:1200` (fixed pulse, bypasses the angle mapping) |
 Joint numbers are 0-7 (0=front-left hip, 1=front-left knee, 2=front-right hip, 3=front-right knee, 4=rear-left hip, 5=rear-left knee, 6=rear-right hip, 7=rear-right knee).
 Never answer "I can't do that" for a servo request — append the tag and confirm briefly.
 ✅ *"Okie, setting the pulse range to 1000-2000 us now srv:range=1000-2000"*
@@ -752,9 +886,43 @@ Khi người dùng yêu cầu hiệu chuẩn / sửa servo, hãy gắn ĐÚNG M�
 |---|---|
 | "đặt dải xung servo 1000 đến 2000 micro giây", "servo chỉ kêu tạch tạch không quay" | `srv:range=1000-2000` |
 | "servo 2 lệch -3 độ" | `srv:trim=2:-3` |
+| "chân 2 quay ngược chiều" / "chân 2 quay đúng chiều lại" | `srv:invert=2:1` / `srv:invert=2:0` |
 | "chân 2 quay ngược chiều" | `srv:invert=2:1` |
 | "test servo 0 ở 1200 micro giây" | `srv:raw=0:1200` |
+| "bước kiểu trực tiếp đi", "đi kiểu trực tiếp" / "quay lại kiểu arc" | `srv:swing=direct` / `srv:swing=arc` |
+| "đi kiểu liền mạch", "đi kiểu 3 chân trụ" / "đi từng chân một" | `srv:crawl=continuous` / `srv:crawl=sequential` |
 | "thả lỏng servo" / "cấp lực lại cho servo" | `srv:relax` / `srv:enable` |
+| "không servo nào quay", "không servo nào hoạt động", "test chân OE", "kiểm tra nguồn servo" | `srv:oe` (đảo chân `OE#` của PCA9685 vài lần để đo bằng đồng hồ tại chân OE trên module: 0 V = outputs BẬT, 3.3 V = outputs TẮT. Dùng khi V+ vẫn có 5 V mà mọi servo đều nhũn. `srv:oe=5` = 5 lần) |
+| "servo 0 kẹt ở giữa", "cho servo 0 chạy 1200 micro giây" | `srv:raw=0:1200` (xung cố định, bỏ qua bảng quy đổi góc) |
+| "đọc trạng thái servo", "kiểm tra servo", "servo đang ở góc nào" | `srv:status` |
+
+**⚠️ ASR hay nghe nhầm "servo" thành tiếng khác** — "trạng thái **server**", "status server", "**sờ vò**", "**sờ vọt**", "**xu vô**", "trạng thái **sớ vơ**"… đều gần như chắc chắn là **servo**. Gặp mấy câu này thì ĐỪNG trả lời kiểu "mình không đọc được trạng thái server" — hãy hiểu là người dùng hỏi trạng thái servo, trả lời ngắn một câu rồi gắn `srv:status` (hoặc tag srv tương ứng) ở cuối.
+| "test chân 2", "test chân số 2", "thử riêng chân 3" | `srv:leg=2` / `srv:leg=3` (0=trước-trái, 1=trước-phải, 2=sau-trái, 3=sau-phải) |
+| "test hành trình servo 0", "quét servo 0 từ 0 đến 180 độ", "cho servo 0 chạy hết hành trình" | `srv:travel=0` (nhiều joint: `srv:travel=0,1,2`) |
+| "vẫy tay chào", "vẫy chào", "chào tôi đi", "giơ chân chào", "vẫy 8 lần" | `srv:wave` (chân TRƯỚC-PHẢI: knee quay lên **170°** rồi xuống **110°**, lặp **5 lần**). Đổi số lần: `srv:wave=1:8` (chân 1, 8 lần); đổi chân: `srv:wave=0` (trước-trái), 2 (sau-trái), 3 (sau-phải) |
+| "nhảy đi" (không có nhạc), "nhún nhảy", "nhảy theo nhịp" | `srv:dance` (nhảy 4 chân theo phách, mỗi phách 1 động tác toàn thân; `srv:dance=DgvDf` = pattern riêng: D=nhún sâu, b=nhún nhẹ, c=ngồi thấp, g=nghiêng, f=gật, v=giậm chân, l=nghiêng trái, r=nghiêng phải, p=chúi tới trước, n=ngửa ra sau, **w=vẫy chân chào rồi nhún tiếp cho hết đoạn**, **s=bước tới 3 bước rồi nhún tiếp cho hết đoạn**) |
+| "mở nhạc và nhảy", "nhảy theo nhạc", "bật nhạc" | code `mv:d` / `mv:d2` / `mv:d3` (server phát `./music/` rồi gửi timeline EQ cho `self.motor.dance`) |
+| "đi nhanh hơn 30%", "nhanh hơn", "chậm lại 30%", "về tốc độ bình thường", "tốc độ đang là bao nhiêu" | `srv:speed=+30` / `srv:speed=-30` / `srv:speed=100` / `srv:speed` (`+/-` là TƯƠNG ĐỐI so với mức đang dùng; `srv:speed=130` = đặt tuyệt đối) |
+| "màn hình bị xoay ngang", "mặt robot nằm ngang", "màn hình ngược rồi", "xoay màn hình lại", "xoay màn hình 90 độ" | `srv:rot=90` (hướng màn hình `0` / `90` / `180` / `270`). Panel VUÔNG 240x240 nên **layout và CPU không đổi**, cả mặt GIF tự xoay theo; firmware cũng tự áp khoảng bù GRAM của hướng đó (90 và 180 phải bù **80 px**, thiếu bù thì ảnh lệch và crop 1/4). Nếu mặt vẫn nằm ngang hoặc bị lật thì thử `srv:rot=270`. Nếu chỉ bị **lệch/crop** thì tinh chỉnh khoảng bù: `srv:rot=90:80:0` (độ:offset_x:offset_y, đơn vị px). `srv:rot` một mình = đọc góc đang dùng. KHÔNG lưu qua khởi động lại: biết số đúng rồi thì ghi cứng vào `config.h` (`DISPLAY_ROTATION` / `DISPLAY_GRAM_ROW_GAP`). |
+
+**Tốc độ (`srv:speed`):** số là % của tốc độ mặc định (100 = mặc định), kẹp trong 50-200% và KHÔNG lưu qua khởi động lại. `srv:speed=+30` là **tương đối so với mức ĐANG dùng** nên nói nhiều lần sẽ cộng dồn (100% → 130% → 160% → …). Khi người dùng nêu con số cụ thể thì dùng dạng **tuyệt đối** (`srv:speed=130`). Thiết bị trả về `speed_pct`: nhận được kết quả đó thì **KHÔNG được im lặng — phải nói ra số % vừa đặt trong một câu ngắn** (vd "tốc độ hiện tại là 190 phần trăm"). Trên ~150% dòng điện tăng mạnh (rail servo 5 V/2 A) dễ brownout — nếu số cao thì nhắc người dùng.
+| "đọc hiệu chuẩn độ sâu", "robot ngồi sâu được bao nhiêu" | `srv:cal` (đọc alpha / chiều dài càng / offset đáy thân / chiều cao đứng / độ gập chạm nền) |
+| "gập knee 20 độ để mình đo" | `srv:cal=20` (cả 4 knee gập +20° và GIỮ nguyên) |
+| "lúc đứng đáy thân cách mặt đất 30 mm" | `srv:cal=0:30` (ghi chiều cao lúc đứng — cũng là điểm chốt lại offset đáy thân) |
+| người dùng báo "gập 20 độ thì cao 14 mm" (chiều cao thân) | `srv:cal=20:14` (ghi điểm vừa đo) |
+| "xoá hiệu chuẩn độ sâu", "trả hình học về mặc định" | `srv:cal=reset` (về alpha/L trong config.h) |
+
+**Dải xung = gain:** `srv:range` làm MỌI động tác của robot đổi biên độ. `500-2500` (mặc định, đúng dải MG90S) ⇒ 0..180° lệnh = 0..180° vật lý; dải hẹp hơn như `1000-2000` ⇒ mọi động tác chỉ còn **nửa** hành trình thật. Chỉ đổi khi người dùng yêu cầu, và nói rõ là biên độ mọi động tác đổi theo.
+
+**Hiệu chuẩn độ sâu (`srv:cal`):** mô hình khớp từ **CHIỀU CAO ĐÁY THÂN SO VỚI NỀN** đo bằng thước — số người dùng đọc được CHÍNH LÀ chiều cao đó, KHÔNG phải "độ hạ". Quy trình: (1) gắn `srv:cal=F` để 4 knee gập +F° và GIỮ; (2) nhờ người dùng đo chiều cao từ nền lên đáy thân; (3) khi người dùng báo "gập F độ thì cao H mm" thì câu trả lời **PHẢI** kết thúc bằng `srv:cal=F:H`. Hai điểm là đủ — firmware tự khớp α và L, lưu NVS và trả kết quả. KHÔNG tự bịa số đo. **Dùng 2 mức gập cách nhau ≥ 10° và đều ≤ 25°** (10° và 20° là tốt nhất): đáy thân đã đặt trên nền ở mức gập ≈ 35°, gập thêm chỉ làm chân bật ngược lên chứ thân không hạ thêm. Chiều cao dự kiến với hình học mặc định: đứng **30 mm**, gập 10° → **22 mm**, gập 20° → **14 mm**. Ghi luôn chiều cao lúc đứng (`srv:cal=0:30`) để chốt offset đáy thân. Nếu người dùng báo 0 mm thì thân đã nằm trên nền — nhờ đo lại ở mức gập nhỏ hơn và KHÔNG ghi điểm đó. `srv:cal=reset` trả về mặc định.
+
+**🚨 BẮT BUỘC — test hành trình:** người dùng nói *"test hành trình servo N"*, *"quét servo N từ 0 đến 180 độ"*, *"cho servo N chạy hết hành trình"* (N = 0..7) thì câu trả lời **PHẢI kết thúc bằng `srv:travel=N`**: joint đi 0° → 180° → 0° (HẾT dải xung 500-2500 µs), 2 vòng, **xong tự về vị trí neutral 90°** (vị trí đứng). Có thêm biến thể NHỎ `srv:travel=N:small`: chỉ quét ±20° quanh neutral — dùng khi người dùng muốn **QUAN SÁT CHIỀU bàn chân**: với hình học hiện tại (knee α=43.3°, càng L=55 mm) gập knee +20° ⇒ bàn chân nhấc lên khỏi nền ~16 mm và đẩy ra ngoài ~10 mm.
+✅ *"Dạ, mình cho servo 0 chạy hết hành trình rồi về vị trí đứng nha srv:travel=0"*
+❌ *"Dạ, mình cho servo 0 chạy hết hành trình nha"* — thiếu tag ⇒ không chạy gì cả
+
+**🚨 BẮT BUỘC — test chân:** người dùng nói *"test chân N"*, *"test chân số N"*, *"thử chân N"* (N = 0..3) thì câu trả lời **PHẢI kết thúc bằng `srv:leg=N`**. Xác nhận mà thiếu tag = robot KHÔNG làm gì (lỗi phổ biến nhất).
+✅ *"Dạ, mình test chân số 2 nha srv:leg=2"*
+❌ *"Dạ, mình test chân số 2 nha"* — thiếu tag ⇒ không test được gì
 Số joint là 0-7 (0=hip trước-trái, 1=knee trước-trái, 2=hip trước-phải, 3=knee trước-phải, 4=hip sau-trái, 5=knee sau-trái, 6=hip sau-phải, 7=knee sau-phải).
 KHÔNG bao giờ trả lời "mình chưa làm được" với yêu cầu servo — hãy gắn tag và xác nhận ngắn gọn.
 ✅ *"Dạ, mình đặt dải xung 1000-2000 micro giây nha srv:range=1000-2000"*
@@ -767,6 +935,8 @@ def build_operational_sections(
     locale: str = "vi",
     enable_voiceprint_resample: bool = False,
     enable_children_games: bool = False,
+    enable_posture: bool = False,
+    enable_servo_tags: bool = False,
 ) -> str:
     """All shared tag sections for one character tone + locale."""
     loc = normalize_operational_locale(locale)
@@ -782,11 +952,18 @@ def build_operational_sections(
         volume_tags_prompt(example_tone=example_tone, locale=loc),
         weather_tags_prompt(example_tone=example_tone, locale=loc),
         tof_calibrate_tags_prompt(example_tone=example_tone, locale=loc),
-        servo_calibrate_tags_prompt(example_tone=example_tone, locale=loc),
         char_switch,
         sleep_tag_prompt(example_tone=example_tone, locale=loc),
         memory_tags_prompt(compact=mem_compact, locale=loc),
     ]
+    # pst:* chỉ dạy khi tính năng được bật (robot_posture.enable) — tránh LLM phát tag
+    # rồi bị bỏ im lặng.
+    if enable_posture:
+        sections.append(posture_tags_prompt(example_tone=example_tone, locale=loc))
+    # `srv:*` chỉ dạy cho thiết bị THẬT SỰ có servo/gait (Blue V4). Robot bánh xe Blue V2 không có
+    # tool nào trong nhóm đó ⇒ không dạy, tránh LLM hứa "vẫy tay/nhảy" rồi tag bị bỏ im lặng.
+    if enable_servo_tags:
+        sections.append(servo_calibrate_tags_prompt(example_tone=example_tone, locale=loc))
     if enable_children_games:
         sections.append(children_games_prompt(locale=loc))
     if enable_voiceprint_resample:

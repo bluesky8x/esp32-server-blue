@@ -22,6 +22,24 @@ TAG = __name__
 logger = setup_logging()
 
 
+def _posture_enabled(conn: Any) -> bool:
+    """pst:* chỉ được dạy khi robot_posture.enable bật (nếu không tag sẽ bị bỏ im lặng)."""
+    from core.utils.robot_posture_codec import posture_enabled
+
+    return posture_enabled(getattr(conn, "config", None) or {})
+
+
+def _servo_tags_prompt_enabled(conn: Any) -> bool:
+    """`srv:*` chỉ dạy cho thiết bị thật sự có servo/gait (Blue V4) — xem Connection."""
+    checker = getattr(conn, "_servo_tags_prompt_enabled", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:  # noqa: BLE001 — prompt không được phép làm hỏng lượt nói
+            return False
+    return False
+
+
 def get_character_wake_map(config: dict[str, Any]) -> dict[str, list[str]]:
     """Map character id → wake phrases (lowercase)."""
     from core.utils.wake_greeting import legacy_wakeup_phrases
@@ -130,6 +148,8 @@ def apply_active_character(conn: "ConnectionHandler", character_id: str) -> bool
         enable_children_games=bool(
             (conn.config.get("children_games") or {}).get("enabled", False)
         ),
+        enable_posture=_posture_enabled(conn),
+        enable_servo_tags=_servo_tags_prompt_enabled(conn),
     )
     conn._character_switch_until = time.time() + 2.0
 

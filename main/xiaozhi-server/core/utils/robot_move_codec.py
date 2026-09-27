@@ -43,25 +43,22 @@ DANCE3_MOVE_DURATION_SEC = 26
 # bằng thời gian thật của N bước.
 DEFAULT_CRAWL_STEP_MS = 350  # khớp default step_ms của tool self.gait.walk (chỉ để ƯỚC LƯỢNG)
 MAX_MOVE_STEPS_PER_CALL = 8  # firmware self.gait.walk chặn 1..8 (vượt → MCP báo lỗi)
-# Hằng số pha của gait (main/boards/blue-v4/config.h) — CHỈ dùng để ước lượng thời gian chờ
-# của tag `steps=`; việc đi thật do firmware quyết.
-# Một chân = 1 cung vung (mix hip+knee trên cùng tham số) + chờ chân chạm nền + push.
-_CRAWL_SETTLE_MS = 288  # knee_fold mặc định 72 deg / ~250 deg/s (servo dưới tải)
-# step_ms hiệu dụng cho việc quy đổi "giây → bước" (connection set lại theo config).
+# Hằng số nhịp của gait (main/boards/blue-v4/config.h, GAIT_JOINT_SEQUENTIAL_CRAWL) — CHỈ dùng để
+# ước lượng thời gian chờ của tag `steps=`; việc đi thật do firmware quyết.
+# Mặc định firmware chạy crawl LIÊN TỤC (duty factor 3/4): cả 4 chân trên một đồng hồ, lệch pha
+# 25% ⇒ 1 bước = 1 chu kỳ = 4 × thời gian vung, KHÔNG còn pha push/chờ riêng.
+# (Chế độ cũ SEQUENTIAL = (swing + chờ chạm nền + push) × 4 ≈ 4x lâu hơn — đổi bằng tag
+# `srv:crawl=sequential`; khi đó con số ở đây sẽ ước lượng thấp, chỉ ảnh hưởng thời gian chờ.)
 _default_crawl_step_ms = DEFAULT_CRAWL_STEP_MS
 
 
 def crawl_cycle_ms(step_ms: int | None = None) -> int:
-    """Thời gian thật (ms) của MỘT bước = 4 chân × (lift+swing + plant + dwell + push).
-
-    Các pha chạy tuần tự nên không thể dùng step_ms * 4 (cách tính cũ sai ~4 lần).
-    """
+    """Thời gian thật (ms) của MỘT bước = 1 chu kỳ 4 chân của crawl liên tục."""
     if step_ms is None:
         step_ms = _default_crawl_step_ms
-    ms = max(200, min(int(step_ms), 6000))
-    swing = max(ms, 300)
-    per_leg = swing + _CRAWL_SETTLE_MS + swing
-    return per_leg * 4
+    # Firmware: clamp(step_ms, 200..6000) rồi clamp tiếp 150..2000 cho riêng thời gian vung.
+    swing = max(200, min(int(step_ms), 2000))
+    return swing * 4
 
 
 def set_default_crawl_step_ms(step_ms: int) -> None:

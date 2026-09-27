@@ -810,6 +810,8 @@ class ConnectionHandler:
                 getattr(self, "active_locale", "vi"),
                 enable_voiceprint_resample=self._voice_enroll_enabled(),
                 enable_children_games=self._children_games_enabled(),
+                enable_posture=self._robot_posture_enabled(),
+                enable_servo_tags=self._servo_tags_prompt_enabled(),
             ),
             self.device_id,
             self.client_ip,
@@ -825,6 +827,25 @@ class ConnectionHandler:
             self.change_system_prompt(enhanced_prompt)
             self._dump_llm_debug("system_prompt", enhanced_prompt)
             self.logger.bind(tag=TAG).debug("系统提示词已增强更新")
+
+    def _servo_tags_prompt_enabled(self) -> bool:
+        """Có dạy tag `srv:*` cho thiết bị này không?
+
+        Hai điều kiện: (a) feature `robot_servo_tags.enable` bật, và (b) thiết bị THẬT SỰ có nhóm
+        tool servo/gait (Blue V4). Robot bánh xe Blue V2 không có tool nào trong nhóm đó nên không
+        được dạy — nếu không LLM sẽ hứa "vẫy tay / nhảy" rồi tag bị bỏ im lặng. Khi chưa biết danh
+        sách tool (handshake chưa xong) thì giữ nguyên hành vi cũ là dạy.
+
+        ⚠️ Tên tool trong func_handler đã được "làm phẳng" dấu chấm thành gạch dưới
+        (`self_gait_wave`, `self_servo_set`), còn mcp_client giữ dạng có dấu chấm — phải nhận cả hai.
+        """
+        if not self._robot_servo_tags_enabled():
+            return False
+        tools = self._robot_move_available_tools()
+        if not tools:
+            return True
+        prefixes = ("self.servo.", "self.gait.", "self_servo_", "self_gait_")
+        return any(name.startswith(prefixes) for name in tools)
 
     def _robot_move_available_tools(self) -> set[str]:
         names: set[str] = set()
@@ -1400,7 +1421,71 @@ class ConnectionHandler:
         self._schedule_post_tts_tof_calibrate(distance_mm, label=label or "assistant")
         return True
 
+    def _dispatch_tof_clear(self, *, label: str = "") -> None:
+        """Send self.tof.clear_calibration to the device (tag `tof:clr`).
+
+        Xoá hiệu chuẩn đã lưu ⇒ guard quay lại ngưỡng fallback (suy từ TOF_CALIBRATION_DISTANCE_MM
+        trong blue-v4/config.h). Gửi NGAY, không chờ TTS: chỉ xoá NVS, không cần robot đứng yên.
+        """
+        from core.utils.util import sanitize_tool_name
+
+        dedupe_key = "tof_clear"
+        if getattr(self, "_executed_tof_clear", None) == dedupe_key:
+            return
+        if not getattr(self, "func_handler", None) or not getattr(self, "loop", None):
+            self.logger.bind(tag=TAG).warning("[tof] skip clear — func_handler/loop missing")
+            return
+
+        candidates = ("self.tof.clear_calibration", "self_tof_clear_calibration")
+        available = self._robot_move_available_tools()
+        tool_name = None
+        for name in candidates:
+            if name in available:
+                tool_name = name
+                break
+            sanitized = sanitize_tool_name(name)
+            if sanitized in available:
+                tool_name = sanitized
+                break
+        if not tool_name:
+            self.logger.bind(tag=TAG).warning(
+                f"[tof] skip clear — clear tool not available (available={len(available)})"
+            )
+            return
+
+        self._executed_tof_clear = dedupe_key
+        self.logger.bind(tag=TAG).info(
+            f"[tof] dispatch tof:clr → {tool_name} (from={label or 'unknown'})"
+        )
+
+        def _on_clear_done(fut, tool=tool_name):
+            try:
+                result = fut.result()
+                payload = getattr(result, "result", None) or getattr(result, "response", None)
+                self.logger.bind(tag=TAG).info(f"[tof] done tof:clr → {tool} result={payload}")
+            except Exception as exc:
+                self.logger.bind(tag=TAG).error(f"[tof] failed tof:clr → {tool}: {exc}")
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.func_handler.handle_llm_function_call(
+                self, {"name": tool_name, "arguments": "{}"}
+            ),
+            self.loop,
+        )
+        future.add_done_callback(_on_clear_done)
+
+    def _dispatch_tof_clear_from_assistant_text(self, text: str, *, label: str = "") -> bool:
+        from core.utils.tof_tag_codec import has_tof_clear_in_assistant_text
+
+        if not text or not has_tof_clear_in_assistant_text(text):
+            return False
+        self._dispatch_tof_clear(label=label or "assistant")
+        return True
+
     def _maybe_dispatch_tof_stt_fallback(self, *, label: str = "", defer_post_tts: bool = True) -> None:
+        if getattr(self, "_requested_tof_clear", False):
+            self._dispatch_tof_clear(label=label or "user_stt_fallback")
+            return
         distance_mm = getattr(self, "_user_requested_tof_calibrate", None)
         if distance_mm is None:
             return
@@ -1863,6 +1948,7 @@ class ConnectionHandler:
         text: str,
         *,
         label: str = "servo",
+        sentence_id: str | None = None,
         defer_post_tts: bool = True,
     ) -> bool:
         """Parse srv:* tags từ câu trả lời LLM → gọi tool self.servo.* sau TTS."""
@@ -1876,7 +1962,9 @@ class ConnectionHandler:
         self.logger.bind(tag=TAG).info(
             f"[srv] tags from {label}: " + ", ".join(c.label() for c in commands)
         )
-        self._dispatch_servo_commands(commands, defer_post_tts=defer_post_tts, label=label)
+        self._dispatch_servo_commands(
+            commands, defer_post_tts=defer_post_tts, label=label, sentence_id=sentence_id
+        )
         return True
 
     def _dispatch_servo_commands(
@@ -1885,14 +1973,15 @@ class ConnectionHandler:
         *,
         defer_post_tts: bool = False,
         label: str = "servo",
+        sentence_id: str | None = None,
     ) -> None:
         if not commands or not self._robot_servo_tags_enabled():
             return
         if defer_post_tts:
             self._schedule_post_tts_action(
                 f"srv_cmds:{label}",
-                lambda cmds=list(commands), l=label: self._dispatch_servo_commands(
-                    cmds, label=l
+                lambda cmds=list(commands), l=label, sid=sentence_id: self._dispatch_servo_commands(
+                    cmds, label=l, sentence_id=sid
                 ),
             )
             return
@@ -1909,18 +1998,30 @@ class ConnectionHandler:
         loop = getattr(self, "loop", None)
         if not hasattr(self, "_executed_servo_cmds"):
             self._executed_servo_cmds = set()
+        # Chống trùng CHỈ trong CÙNG MỘT lượt trả lời (khoá gồm sentence_id, như mv:/pst:).
+        # Trước đây khoá chỉ là nhãn lệnh và không bao giờ được xoá ⇒ mỗi lệnh srv: chỉ chạy
+        # được ĐÚNG MỘT LẦN cho mỗi kết nối thiết bị, lần nói thứ hai bị bỏ IM LẶNG (không log),
+        # người dùng thấy "nói mà robot không làm gì".
+        if sentence_id is not None:
+            self._executed_servo_cmds = {
+                key for key in self._executed_servo_cmds if key[0] == sentence_id
+            }
         for cmd in commands:
-            dedupe_key = cmd.label()
-            if dedupe_key in self._executed_servo_cmds:
+            dedupe_key = (sentence_id, cmd.label())
+            if sentence_id is not None and dedupe_key in self._executed_servo_cmds:
+                self.logger.bind(tag=TAG).info(
+                    f"[srv] skip {cmd.label()} — đã dispatch trong cùng lượt (sentence_id={sentence_id})"
+                )
                 continue
             # Không fallback: thiết bị không có tool tương ứng thì bỏ tag.
             tool_name, tool_args = build_servo_mcp_call(cmd, available)
             if not tool_name:
                 self.logger.bind(tag=TAG).warning(
-                    f"[srv] {cmd.label()} — thiết bị không có tool self.servo.*, bỏ qua"
+                    f"[srv] {cmd.label()} — thiết bị không có tool tương ứng, bỏ qua"
                 )
                 continue
-            self._executed_servo_cmds.add(dedupe_key)
+            if sentence_id is not None:
+                self._executed_servo_cmds.add(dedupe_key)
             if loop is None:
                 self.logger.bind(tag=TAG).warning("[srv] event loop missing")
                 continue
@@ -2288,9 +2389,12 @@ class ConnectionHandler:
 
         if not text:
             return
-        if not getattr(self, "_user_requested_move", False):
+        # Tag `mv:*` do CHÍNH LLM phát ra là quyết định của LLM ⇒ luôn thi hành, không phụ thuộc
+        # bộ dò từ khoá phía server. Cờ `move_intent` chỉ dùng để chặn đường SUY LUẬN (fallback khi
+        # LLM không nêu tag) — nhờ vậy server không phải giữ danh sách từ khoá để "hiểu" tiếng Việt.
+        if not extract_move_codes(text) and not getattr(self, "_user_requested_move", False):
             self.logger.bind(tag=TAG).debug(
-                f"[mv] skip ({label}): user move_intent=False this turn"
+                f"[mv] skip ({label}): no mv:* tag in reply and move_intent=False this turn"
             )
             return
         allow_inference = self._robot_move_allow_inference()
@@ -3048,6 +3152,8 @@ class ConnectionHandler:
                 getattr(self, "active_locale", "vi"),
                 enable_voiceprint_resample=self._voice_enroll_enabled(),
                 enable_children_games=self._children_games_enabled(),
+                enable_posture=self._robot_posture_enabled(),
+                enable_servo_tags=self._servo_tags_prompt_enabled(),
             ),
             self.device_id,
             self.client_ip,
@@ -3259,15 +3365,24 @@ class ConnectionHandler:
             from core.utils.language_runtime import update_locale_from_user_text
             from core.utils.robot_move_codec import user_requested_robot_move
             from core.utils.volume_tag_codec import infer_volume_from_user_text
-            from core.utils.tof_tag_codec import infer_tof_calibrate_from_user_text
+            from core.utils.tof_tag_codec import (
+                infer_tof_calibrate_from_user_text,
+                infer_tof_clear_from_user_text,
+            )
 
             update_locale_from_user_text(self, query, reason="chat")
             if depth == 0:
                 self._user_requested_move = user_requested_robot_move(query)
                 self._user_requested_volume = infer_volume_from_user_text(query)
-                self._user_requested_tof_calibrate = infer_tof_calibrate_from_user_text(query)
+                self._requested_tof_clear = infer_tof_clear_from_user_text(query)
+                self._user_requested_tof_calibrate = (
+                    None
+                    if self._requested_tof_clear
+                    else infer_tof_calibrate_from_user_text(query)
+                )
                 self._last_dispatched_volume = None
                 self._executed_tof_calibrate = None
+                self._executed_tof_clear = None
             self.logger.bind(tag=TAG).info(
                 f"大模型收到用户消息: {query} [locale={getattr(self, 'active_locale', 'vi')}]"
                 + (

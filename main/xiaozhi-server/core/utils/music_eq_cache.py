@@ -16,7 +16,12 @@ from core.utils.music_eq_analyzer import (
 
 logger = logging.getLogger(__name__)
 
-CACHE_VERSION = 1
+# Bump mỗi khi CÁCH DỰNG TIMELINE đổi ⇒ cache cũ bị bỏ, bài được phân tích lại.
+#   v2 (24-09): thêm bước "phá nhàm" (_spice_timeline) — timeline cũ có run dài 84 s cùng một state.
+#   v3 (24-09): phá nhàm chọn điệu thông minh hơn — bài <3 điệu thì mở rộng ra 5 điệu, bài đủ điệu
+#   thì chỉ chọn trong chính các điệu của bài.
+#   v4 (27-09): thêm đoạn VẪY CHÂN (chữ 'w') ở những đoạn sôi động nhất.
+CACHE_VERSION = 5
 CACHE_DIR_NAME = ".eq_cache"
 
 # path_key -> (mtime_ns, size, profile)

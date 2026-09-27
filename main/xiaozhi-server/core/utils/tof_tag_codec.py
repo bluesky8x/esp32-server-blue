@@ -10,6 +10,10 @@ TOF_CAL_TAG_RE = re.compile(
 TOF_CAL_TAG_STRIP_RE = re.compile(
     r"\btof\s*:\s*cal(?:\s*:\s*\d{1,4})?\b", re.IGNORECASE
 )
+# `tof:clr` = XOÁ hiệu chuẩn đã lưu trên thiết bị (self.tof.clear_calibration) ⇒ guard quay lại
+# ngưỡng fallback. Nhận cả `tof:clear` / `tof:reset` cho dễ nói.
+TOF_CLR_TAG_RE = re.compile(r"\btof\s*:\s*(?:clr|clear|reset)\b", re.IGNORECASE)
+TOF_CLR_TAG_STRIP_RE = re.compile(r"\btof\s*:\s*(?:clr|clear|reset)\b", re.IGNORECASE)
 
 _CALIBRATE_INTENT_RE = re.compile(
     r"(?:hiệu chuẩn|hieu chuan|hiệu chỉnh|hieu chinh|calibrat|canh chinh|canh chuẩn|"
@@ -58,11 +62,31 @@ def extract_tof_calibrate_from_assistant_text(text: str) -> int | None:
 def strip_tof_tags(text: str, *, trim_edges: bool = False) -> str:
     if not text:
         return ""
-    cleaned = TOF_CAL_TAG_STRIP_RE.sub("", text)
+    cleaned = TOF_CLR_TAG_STRIP_RE.sub("", text)
+    cleaned = TOF_CAL_TAG_STRIP_RE.sub("", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     if trim_edges:
         return cleaned.strip()
     return cleaned
+
+
+def has_tof_clear_in_assistant_text(text: str) -> bool:
+    """True khi assistant gắn tag `tof:clr` (xoá hiệu chuẩn đang lưu trên thiết bị)."""
+    return bool(text and TOF_CLR_TAG_RE.search(text))
+
+
+_CLEAR_INTENT_RE = re.compile(
+    r"(?:xóa hiệu chuẩn|xoa hieu chuan|xóa cal|xoa cal|xóa cảm biến|xoa cam bien|"
+    r"bỏ hiệu chuẩn|bo hieu chuan|reset cảm biến|reset cam bien|"
+    r"hiệu chuẩn lại|hieu chuan lai|làm lại hiệu chuẩn|lam lai hieu chuan|"
+    r"clear\s+(?:the\s+)?calibration|reset\s+(?:the\s+)?(?:tof|distance sensor|calibration))",
+    re.IGNORECASE,
+)
+
+
+def infer_tof_clear_from_user_text(text: str) -> bool:
+    """True khi user yêu cầu XOÁ hiệu chuẩn ToF (ưu tiên hơn ý định hiệu chuẩn)."""
+    return bool(text and _CLEAR_INTENT_RE.search(str(text)))
 
 
 def infer_tof_calibrate_from_user_text(text: str) -> int | None:
