@@ -14,6 +14,10 @@ TOF_CAL_TAG_STRIP_RE = re.compile(
 # ngưỡng fallback. Nhận cả `tof:clear` / `tof:reset` cho dễ nói.
 TOF_CLR_TAG_RE = re.compile(r"\btof\s*:\s*(?:clr|clear|reset)\b", re.IGNORECASE)
 TOF_CLR_TAG_STRIP_RE = re.compile(r"\btof\s*:\s*(?:clr|clear|reset)\b", re.IGNORECASE)
+# `tof:guard=0|1` = BẬT/TẮT guard vật cản–vực lúc chạy (tool `self.tof.guard`); `tof:guard` không
+# tham số = chỉ đọc trạng thái. Dùng khi cần cho robot đi qua chỗ chật mà không muốn nó dừng.
+TOF_GUARD_TAG_RE = re.compile(r"\btof\s*:\s*guard(?:\s*=\s*([01]))?\b", re.IGNORECASE)
+TOF_GUARD_TAG_STRIP_RE = re.compile(r"\btof\s*:\s*guard(?:\s*=\s*[01])?\b", re.IGNORECASE)
 
 _CALIBRATE_INTENT_RE = re.compile(
     r"(?:hiệu chuẩn|hieu chuan|hiệu chỉnh|hieu chinh|calibrat|canh chinh|canh chuẩn|"
@@ -62,12 +66,24 @@ def extract_tof_calibrate_from_assistant_text(text: str) -> int | None:
 def strip_tof_tags(text: str, *, trim_edges: bool = False) -> str:
     if not text:
         return ""
-    cleaned = TOF_CLR_TAG_STRIP_RE.sub("", text)
+    cleaned = TOF_GUARD_TAG_STRIP_RE.sub("", text)
+    cleaned = TOF_CLR_TAG_STRIP_RE.sub("", cleaned)
     cleaned = TOF_CAL_TAG_STRIP_RE.sub("", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     if trim_edges:
         return cleaned.strip()
     return cleaned
+
+
+def extract_tof_guard_from_assistant_text(text: str) -> int | None:
+    """`tof:guard=1` → 1 (bật), `=0` → 0 (tắt), `tof:guard` trần → -1 (chỉ đọc).
+
+    None = không có tag này trong câu trả lời.
+    """
+    match = TOF_GUARD_TAG_RE.search(text or "")
+    if not match:
+        return None
+    return int(match.group(1)) if match.group(1) else -1
 
 
 def has_tof_clear_in_assistant_text(text: str) -> bool:

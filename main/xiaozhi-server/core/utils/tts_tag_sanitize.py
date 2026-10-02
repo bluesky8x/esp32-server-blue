@@ -9,7 +9,7 @@ _TRAILING_PARTIAL_CONTROL_RE = re.compile(
     r"(?:"
     r"\s+vol\s*:?\s*\d{0,3}|"
     r"\s+wx\s*:.*|"
-    r"\s+tof\s*:?\s*(?:cal(?:\s*:?\s*\d{0,4})?|clr|clea?r?|reset)|"
+    r"\s+tof\s*:?\s*(?:cal(?:\s*:?\s*\d{0,4})?|clr|clea?r?|reset|gua?r?d?(?:\s*=\s*[01])?)|"
     r"\s+mv\s*:.*|"
     r"\s+pst\s*:.*|"
     r"\s+srv\s*:.*|"

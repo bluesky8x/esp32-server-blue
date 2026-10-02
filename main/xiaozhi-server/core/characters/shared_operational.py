@@ -426,6 +426,7 @@ The user ALREADY placed the robot where they want (open floor ahead, stable) bef
 | User requests calibration (any wording) | `tof:cal` (device auto — median reading) |
 | Rare: fixed target | `tof:cal:<mm>` only if user measured exact distance |
 | User wants to DROP the saved calibration ("clear calibration", "reset the sensor") | `tof:clr` (deletes it from NVS; the guard falls back to the config thresholds) |
+| User wants to turn the obstacle/drop-off guard ON or OFF ("turn off the collision sensor", "stop stopping for obstacles", "turn it back on") | `tof:guard=0` (off) / `tof:guard=1` (on) — bare `tof:guard` only reads the state |
 
 Calibration runs shortly after your TTS (the device reads its own sensor) — no extra placement step.
 
@@ -444,6 +445,7 @@ Người dùng ĐÃ đặt robot đúng chỗ (sàn trống, đứng yên) trư�
 | User yêu cầu hiệu chuẩn (bất kỳ cách nói nào) | `tof:cal` (robot tự đọc & lưu) |
 | Hiếm: đích cố định | `tof:cal:<mm>` chỉ khi user đo chính xác |
 | User muốn XOÁ hiệu chuẩn ("xoá hiệu chuẩn", "reset cảm biến") | `tof:clr` (xoá trong NVS ⇒ guard quay lại ngưỡng trong config.h) |
+| User muốn BẬT/TẮT guard vật cản–vực ("tắt cảm biến vật cản", "đừng dừng vì vướng nữa", "bật lại chống va chạm") | `tof:guard=0` (tắt) / `tof:guard=1` (bật) — `tof:guard` trần = chỉ đọc trạng thái |
 
 Hiệu chuẩn chạy ngay sau TTS (robot tự đọc cảm biến) — không cần bước đặt robot riêng.
 

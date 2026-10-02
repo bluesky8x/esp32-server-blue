@@ -258,6 +258,14 @@ class ConnectionHandler:
             )
 
             self.device_id = self.headers.get("device-id", None)
+            # Bảng điều khiển web (`GET /robot/`) cần biết máy nào đang kết nối — xem
+            # core/utils/live_devices.py. Xoá đăng ký ở khối `finally` bên dưới.
+            try:
+                from core.utils import live_devices
+
+                live_devices.register(self)
+            except Exception as exc:  # không để lỗi sổ đăng ký làm chết phiên thoại
+                self.logger.bind(tag=TAG).warning(f"live_devices.register lỗi: {exc}")
 
             # 认证通过,继续处理
             self.websocket = ws
@@ -302,6 +310,12 @@ class ConnectionHandler:
             self.logger.bind(tag=TAG).error(f"Connection error: {str(e)}-{stack_trace}")
             return
         finally:
+            try:
+                from core.utils import live_devices
+
+                live_devices.unregister(self)
+            except Exception:
+                pass
             try:
                 await self._save_and_close(ws)
             except Exception as final_error:
@@ -1403,10 +1417,18 @@ class ConnectionHandler:
     def _dispatch_tof_from_assistant_text(
         self, text: str, *, label: str = "", defer_post_tts: bool = False
     ) -> bool:
-        from core.utils.tof_tag_codec import extract_tof_calibrate_from_assistant_text
+        from core.utils.tof_tag_codec import (
+            extract_tof_calibrate_from_assistant_text,
+            extract_tof_guard_from_assistant_text,
+        )
 
         if not text:
             return False
+        # `tof:guard[=0|1]` bật/tắt guard lúc chạy — gửi ngay, không chờ TTS (không cần robot đứng yên).
+        guard = extract_tof_guard_from_assistant_text(text)
+        if guard is not None:
+            self._dispatch_tof_guard(guard, label=label or "assistant")
+            return True
         distance_mm = extract_tof_calibrate_from_assistant_text(text)
         if distance_mm is None:
             return False
@@ -1420,6 +1442,58 @@ class ConnectionHandler:
             return True
         self._schedule_post_tts_tof_calibrate(distance_mm, label=label or "assistant")
         return True
+
+    def _dispatch_tof_guard(self, enable: int, *, label: str = "") -> None:
+        """Send self.tof.guard to the device (`tof:guard=0|1`, -1 = chỉ đọc trạng thái)."""
+        from core.utils.util import sanitize_tool_name
+
+        dedupe_key = ("tof_guard", enable)
+        if getattr(self, "_executed_tof_guard", None) == dedupe_key:
+            return
+        if not getattr(self, "func_handler", None) or not getattr(self, "loop", None):
+            self.logger.bind(tag=TAG).warning("[tof] skip guard — func_handler/loop missing")
+            return
+
+        candidates = ("self.tof.guard", "self_tof_guard")
+        available = self._robot_move_available_tools()
+        tool_name = None
+        for name in candidates:
+            if name in available:
+                tool_name = name
+                break
+            sanitized = sanitize_tool_name(name)
+            if sanitized in available:
+                tool_name = sanitized
+                break
+        if not tool_name:
+            self.logger.bind(tag=TAG).warning(
+                "[tof] skip guard — tool self.tof.guard không có "
+                f"(firmware chưa nạp bản mới? available={len(available)})"
+            )
+            return
+
+        self._executed_tof_guard = dedupe_key
+        args_json = json.dumps({"enable": enable})
+        mode = {-1: "read", 0: "off", 1: "on"}.get(enable, str(enable))
+        self.logger.bind(tag=TAG).info(f"[tof] dispatch tof:guard ({mode}) → {tool_name}")
+
+        def _on_guard_done(fut, tool=tool_name, m=mode):
+            try:
+                result = fut.result()
+                payload = getattr(result, "result", None) or getattr(result, "response", None)
+                self.logger.bind(tag=TAG).info(
+                    f"[tof] done tof:guard ({m}) → {tool} result={payload}"
+                )
+            except Exception as exc:
+                self.logger.bind(tag=TAG).error(f"[tof] failed tof:guard → {tool}: {exc}")
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.func_handler.handle_llm_function_call(
+                self, {"name": tool_name, "arguments": args_json}
+            ),
+            self.loop,
+        )
+        future.add_done_callback(_on_guard_done)
 
     def _dispatch_tof_clear(self, *, label: str = "") -> None:
         """Send self.tof.clear_calibration to the device (tag `tof:clr`).

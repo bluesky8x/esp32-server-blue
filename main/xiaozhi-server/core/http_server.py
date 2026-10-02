@@ -3,6 +3,7 @@ from aiohttp import web
 from config.logger import setup_logging
 from core.api.ota_handler import OTAHandler
 from core.api.vision_handler import VisionHandler
+from core.api.robot_control_handler import RobotControlHandler
 
 TAG = __name__
 
@@ -13,6 +14,7 @@ class SimpleHttpServer:
         self.logger = setup_logging()
         self.ota_handler = OTAHandler(config)
         self.vision_handler = VisionHandler(config)
+        self.robot_handler = RobotControlHandler(config)
 
     def _get_websocket_url(self, local_ip: str, port: int) -> str:
         """获取websocket地址
@@ -72,6 +74,16 @@ class SimpleHttpServer:
                         web.options(
                             "/mcp/vision/explain", self.vision_handler.handle_options
                         ),
+                        # Bảng điều khiển robot (LAN): trang nút bấm + API gửi tag cho thiết bị
+                        # đang kết nối. Xem core/api/robot_control_handler.py.
+                        web.get("/robot/", self.robot_handler.handle_page),
+                        web.get("/robot", self.robot_handler.handle_page),
+                        web.get("/robot/devices", self.robot_handler.handle_devices),
+                        web.post("/robot/cmd", self.robot_handler.handle_cmd),
+                        web.post("/robot/raw", self.robot_handler.handle_raw),
+                        web.get("/robot/tools", self.robot_handler.handle_tools),
+                        web.options("/robot/cmd", self.robot_handler.handle_options),
+                        web.options("/robot/raw", self.robot_handler.handle_options),
                     ]
                 )
 
