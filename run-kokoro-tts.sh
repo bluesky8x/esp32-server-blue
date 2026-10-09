@@ -7,13 +7,35 @@ COMPOSE_FILE="$ROOT/docker/tts/docker-compose.yml"
 ENV_FILE="$ROOT/docker/tts/.env"
 
 COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile kokoro)
-[[ -f "$ENV_FILE" ]] && COMPOSE+=(--env-file "$ENV_FILE")
+if [[ -f "$ENV_FILE" ]]; then
+  COMPOSE+=(--env-file "$ENV_FILE")
+fi
+
+SERVICE="kokoro-tts"
+IMAGE="blue-kokoro-tts:latest"
 
 PORT="${KOKORO_TTS_PORT:-8883}"
 BASE="http://127.0.0.1:${PORT}"
 VOICE="${KOKORO_DEFAULT_VOICE:-af_heart}"
 
 cmd="${1:-help}"
+
+image_exists() {
+  docker image inspect "$IMAGE" >/dev/null 2>&1
+}
+
+# Start container. `up` KHÔNG build lại mỗi lần: chỉ build khi chưa có image
+# (`docker compose up` không tự build trừ khi thiếu image). Muốn ép build lại
+# dùng: $0 build
+start_service() {
+  if image_exists; then
+    echo "Reusing image $IMAGE (no rebuild). Changed code/config? Run: $0 build"
+    "${COMPOSE[@]}" up -d "$SERVICE"
+  else
+    echo "Image $IMAGE not found — first build, this takes a few minutes..."
+    "${COMPOSE[@]}" up -d --build "$SERVICE"
+  fi
+}
 
 wait_healthy() {
   echo "Waiting for Kokoro-TTS health at $BASE (first start downloads models)..."
@@ -29,23 +51,23 @@ wait_healthy() {
 
 case "$cmd" in
   up)
-    "${COMPOSE[@]}" up -d --build kokoro-tts
+    start_service
     echo "Kokoro-TTS API: $BASE/v1/audio/speech"
     echo "Voices:         $BASE/voices"
     echo "Default voice:  $VOICE"
     echo "Next: $0 test"
     ;;
   down)
-    "${COMPOSE[@]}" stop kokoro-tts
+    "${COMPOSE[@]}" stop "$SERVICE"
     ;;
   build)
-    "${COMPOSE[@]}" build kokoro-tts
+    "${COMPOSE[@]}" build "$SERVICE"
     ;;
   logs)
-    "${COMPOSE[@]}" logs -f kokoro-tts
+    "${COMPOSE[@]}" logs -f "$SERVICE"
     ;;
   test)
-    "${COMPOSE[@]}" up -d --build kokoro-tts
+    start_service
     wait_healthy
     curl -s -X POST "$BASE/v1/audio/speech" \
       -H "Content-Type: application/json" \
@@ -55,12 +77,12 @@ case "$cmd" in
     file /tmp/blue-kokoro-en.wav
     ;;
   voices)
-    "${COMPOSE[@]}" up -d kokoro-tts
+    start_service
     wait_healthy
     curl -s "$BASE/voices" | python3 -m json.tool 2>/dev/null || curl -s "$BASE/voices"
     ;;
   samples)
-    "${COMPOSE[@]}" up -d kokoro-tts
+    start_service
     wait_healthy
     OUT_DIR="${KOKORO_SAMPLES_DIR:-/tmp/kokoro-samples}"
     mkdir -p "$OUT_DIR"
@@ -100,6 +122,7 @@ PY
     ;;
   *)
     echo "Usage: $0 {up|down|build|logs|test|voices|samples}"
+    echo "  up  Start Kokoro-TTS (builds ONLY the first time; use 'build' to force)"
     exit 1
     ;;
 esac

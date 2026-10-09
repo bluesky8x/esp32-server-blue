@@ -7,13 +7,35 @@ COMPOSE_FILE="$ROOT/docker/tts/docker-compose.yml"
 ENV_FILE="$ROOT/docker/tts/.env"
 
 COMPOSE=(docker compose -f "$COMPOSE_FILE" --profile vieneu)
-[[ -f "$ENV_FILE" ]] && COMPOSE+=(--env-file "$ENV_FILE")
+if [[ -f "$ENV_FILE" ]]; then
+  COMPOSE+=(--env-file "$ENV_FILE")
+fi
+
+SERVICE="vieneu-tts"
+IMAGE="blue-vieneu-tts:latest"
 
 PORT="${VIENEU_TTS_PORT:-8882}"
 BASE="http://127.0.0.1:${PORT}"
 DEFAULT_VOICE="${VIENEU_DEFAULT_VOICE:-Ngọc Lan}"
 
 cmd="${1:-help}"
+
+image_exists() {
+  docker image inspect "$IMAGE" >/dev/null 2>&1
+}
+
+# Start container. `up` KHÔNG build lại mỗi lần: chỉ build khi chưa có image
+# (`docker compose up` không tự build trừ khi thiếu image). Muốn ép build lại
+# dùng: $0 build  (giữ cache) hoặc $0 rebuild (xoá image, clone lại repo).
+start_service() {
+  if image_exists; then
+    echo "Reusing image $IMAGE (no rebuild). Changed code/config? Run: $0 build"
+    "${COMPOSE[@]}" up -d "$SERVICE"
+  else
+    echo "Image $IMAGE not found — first build, this takes a few minutes..."
+    "${COMPOSE[@]}" up -d --build "$SERVICE"
+  fi
+}
 
 wait_healthy() {
   echo "Waiting for VieNeu-TTS health at $BASE (first start may download models)..."
@@ -29,24 +51,24 @@ wait_healthy() {
 
 case "$cmd" in
   up)
-    "${COMPOSE[@]}" up -d --build vieneu-tts
+    start_service
     echo "VieNeu-TTS API: $BASE/v1/audio/speech"
     echo "Voices:       $BASE/voices"
     echo "Next: $0 test"
     ;;
   down)
-    "${COMPOSE[@]}" stop vieneu-tts
+    "${COMPOSE[@]}" stop "$SERVICE"
     ;;
   build)
-    "${COMPOSE[@]}" build vieneu-tts
+    "${COMPOSE[@]}" build "$SERVICE"
     ;;
   rebuild)
     echo "Full rebuild (no cache) — removes old image, re-clones VieNeu repo..."
-    "${COMPOSE[@]}" stop vieneu-tts 2>/dev/null || true
+    "${COMPOSE[@]}" stop "$SERVICE" 2>/dev/null || true
     docker rm -f blue-vieneu-tts 2>/dev/null || true
-    docker rmi blue-vieneu-tts:latest 2>/dev/null || true
-    "${COMPOSE[@]}" build --no-cache vieneu-tts
-    "${COMPOSE[@]}" up -d vieneu-tts
+    docker rmi "$IMAGE" 2>/dev/null || true
+    "${COMPOSE[@]}" build --no-cache "$SERVICE"
+    "${COMPOSE[@]}" up -d "$SERVICE"
     echo "Wait for health, then: $0 info && $0 voices"
     ;;
   info)
@@ -74,7 +96,8 @@ case "$cmd" in
     cat <<EOF
 Usage: $0 {up|down|build|rebuild|test|voices|info|logs}
 
-  up       Build and start VieNeu-TTS on port $PORT
+  up       Start VieNeu-TTS on port $PORT (builds ONLY the first time — reuses
+           the existing image afterwards; use `build`/`rebuild` to force)
   rebuild  Force clean rebuild (use when voices/repo still look old)
   info     Show repo/ref baked into running container
   test     Synthesize sample Vietnamese WAV

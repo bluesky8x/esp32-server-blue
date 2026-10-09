@@ -95,12 +95,16 @@ case "$cmd" in
     if image_exists; then
       # Reuse the existing image: rebuilding on every start leaves stale <none> images.
       echo "Reusing image $IMAGE (no rebuild)."
-      echo "Code changed? Run: $0 sync"
       compose up -d
     else
       echo "Image $IMAGE not found — first build, this takes a few minutes..."
       compose up -d --build
     fi
+    # Image có thể CŨ HƠN code trong working tree (chỉ build khi được yêu cầu). Khi container bị
+    # tạo lại từ image cũ (Docker Desktop khởi động lại, compose up…) thì toàn bộ code đã sync
+    # BIẾN MẤT ⇒ mất panel web /robot/ (404) và các tính năng mới. Vì vậy `up` luôn copy code
+    # hiện tại vào container rồi restart để nạp lại.
+    sync_code
     ip="$(lan_ip_hint)"
     echo ""
     echo "Server started."
